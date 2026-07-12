@@ -63,7 +63,7 @@ const TOKENS = {
   ink: "#23241F",
   pine: "#3D453D",
   pineDark: "#2B322B",
-  headerBg: "#A78E72",
+  headerBg: "#3D453D",
   river: "#63706B",
   clay: "#B08D6E",
   clayLight: "#DED1BE",
@@ -738,7 +738,7 @@ export default function App() {
 
   return (
     <div style={{ background: TOKENS.sand, minHeight: "100vh" }} className="pb-28">
-      <div className="max-w-xl mx-auto">
+      <div className="max-w-xl mx-auto lg:max-w-5xl">
       <FontLoader />
       <Toast toast={toast} />
       <Header view={view} onMenuClick={() => setDrawerOpen(true)} />
@@ -875,7 +875,7 @@ export default function App() {
       {/* Floating action buttons */}
       {view !== "comissao" && (
         <div className="fixed bottom-6 inset-x-0 z-30 pointer-events-none">
-          <div className="max-w-xl mx-auto flex justify-end pr-5">
+          <div className="max-w-xl mx-auto flex justify-end pr-5 lg:max-w-5xl">
             <div className="flex flex-col gap-3 pointer-events-auto">
               <button
                 onClick={() => {
@@ -1913,6 +1913,19 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+// Mesma mistura de hexToRgba, mas já resolvida contra fundo branco — opaca,
+// para colunas/linhas fixas (sticky) que não podem deixar o conteúdo por
+// baixo vazar ao rolar (dedo no celular).
+function tintOpaque(hex, alpha) {
+  const clean = hex.replace("#", "");
+  const bigint = parseInt(clean, 16);
+  const r = (bigint >> 16) & 255;
+  const g = (bigint >> 8) & 255;
+  const b = bigint & 255;
+  const mix = (c) => Math.round(c * alpha + 255 * (1 - alpha));
+  return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
+}
+
 function addDaysISO(iso, n) {
   const d = new Date(iso + "T00:00:00");
   d.setDate(d.getDate() + n);
@@ -2157,7 +2170,7 @@ function CalendarView({
                       position: "sticky",
                       left: 0,
                       zIndex: 1,
-                      background: hexToRgba(color, 0.08),
+                      background: tintOpaque(color, 0.08),
                       borderLeft: `3px solid ${color}`,
                       borderBottom: `1px solid ${TOKENS.sand}`,
                     }}
