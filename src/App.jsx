@@ -2128,6 +2128,7 @@ function CalendarView({
                     top: 0,
                     zIndex: 2,
                     background: isWeekend ? TOKENS.sand : TOKENS.cream,
+                    borderTop: isWeekend ? `3px solid ${TOKENS.ink}` : "3px solid transparent",
                     borderBottom: `2px solid ${isToday ? TOKENS.clay : TOKENS.sand}`,
                   }}
                   className="font-body text-center py-2.5"
@@ -2185,10 +2186,11 @@ function CalendarView({
                     style={{
                       gridColumn: `2 / span ${days.length}`,
                       position: "relative",
-                      height: ROW_HEIGHT,
+                      height: "100%",
+                      minHeight: ROW_HEIGHT,
                     }}
                   >
-                    <div style={{ display: "flex" }}>
+                    <div style={{ display: "flex", height: "100%" }}>
                       {daysISO.map((dISO, di) => {
                         const isToday = dISO === today;
                         const isWeekend = days[di].getDay() === 0 || days[di].getDay() === 6;
@@ -2199,7 +2201,7 @@ function CalendarView({
                             style={{
                               position: "relative",
                               width: CELL_WIDTH,
-                              height: ROW_HEIGHT,
+                              height: "100%",
                               flexShrink: 0,
                               background: isToday
                                 ? hexToRgba(TOKENS.river, 0.12)
@@ -2210,18 +2212,7 @@ function CalendarView({
                               borderRight: `1px solid ${TOKENS.sand}`,
                             }}
                             aria-label="Toque para lançar reserva"
-                          >
-                            <span
-                              style={{
-                                position: "absolute",
-                                left: "50%",
-                                top: 0,
-                                bottom: 0,
-                                width: 1,
-                                background: hexToRgba(TOKENS.moss, 0.25),
-                              }}
-                            />
-                          </button>
+                          />
                         );
                       })}
                     </div>
@@ -2233,9 +2224,27 @@ function CalendarView({
                       const hasRightCut = endIdx !== -1;
                       const leftIdx = hasLeftCut ? startIdx : 0;
                       const rightIdx = hasRightCut ? endIdx + 1 : daysISO.length;
+
+                      // Reserva encadeada: outra reserva do mesmo imóvel começa exatamente
+                      // no dia em que esta termina (ou termina no dia em que esta começa).
+                      // Nesse caso usamos um respiro maior nessa ponta, mantendo o corte
+                      // diagonal (parallelogramo) para as duas barras encaixarem como um
+                      // "zigue-zague" com uma fresta fina entre elas, em vez de ficarem coladas.
+                      const prevAdjacent = propReservations.some(
+                        (other) => other.id !== r.id && other.checkOut === r.checkIn
+                      );
+                      const nextAdjacent = propReservations.some(
+                        (other) => other.id !== r.id && other.checkIn === r.checkOut
+                      );
+
                       const GAP = 3;
-                      const leftPx = leftIdx * CELL_WIDTH + (hasLeftCut ? GAP : 0);
-                      const rightEdgePx = rightIdx * CELL_WIDTH - (hasRightCut ? GAP : 0);
+                      const TURNOVER_GAP = 20;
+
+                      const leftGap = hasLeftCut ? (prevAdjacent ? TURNOVER_GAP : GAP) : 0;
+                      const rightGap = hasRightCut ? (nextAdjacent ? TURNOVER_GAP : GAP) : 0;
+
+                      const leftPx = leftIdx * CELL_WIDTH + leftGap;
+                      const rightEdgePx = rightIdx * CELL_WIDTH - rightGap;
                       const widthPx = rightEdgePx - leftPx;
                       const barColor = r.paymentStatus === "pago" ? TOKENS.pine : TOKENS.clay;
                       const clip = `polygon(${hasLeftCut ? CHAMFER : 0}px 0, 100% 0, calc(100% - ${
@@ -2254,11 +2263,11 @@ function CalendarView({
                             top: 2,
                             left: leftPx,
                             width: widthPx,
-                            height: ROW_HEIGHT - 4,
-                            background: `linear-gradient(180deg, ${hexToRgba("#FFFFFF", 0.14)}, ${hexToRgba("#000000", 0.06)}), ${barColor}`,
+                            height: "calc(100% - 4px)",
+                            background: barColor,
                             clipPath: clip,
                             border: "none",
-                            boxShadow: "0 2px 5px rgba(34,38,31,0.2)",
+                            boxShadow: "none",
                             padding: "0 8px",
                             cursor: "pointer",
                           }}
