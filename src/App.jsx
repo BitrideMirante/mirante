@@ -203,7 +203,7 @@ function suggestedHostPayout(property, checkIn, checkOut, guests, breakfast, dis
     cur = addDaysISO(cur, 1);
   }
   const d = Number(discount) || 0;
-  if (d > 0 && d < 1) total = total * (1 - d);
+  if (d > 0 && d <= 1) total = total * (1 - d);
   // Taxa de limpeza: valor único por estadia (não multiplica por noites),
   // somado ao repasse sem sofrer desconto.
   if (property.cleaningFee !== "" && property.cleaningFee !== undefined && property.cleaningFee !== null) {
@@ -302,6 +302,67 @@ function dateInReservation(date, res) {
   return iso >= res.checkIn && iso < res.checkOut;
 }
 
+// Preenche campos que podem faltar em imóveis salvos por versões antigas do
+// app (tanto vindos do banco quanto de um backup importado), e migra o campo
+// antigo "hostPayout" (único) para "hostPayoutWeekday". Usada tanto no
+// carregamento inicial quanto na importação de backup, para que os dois
+// caminhos fiquem sempre consistentes.
+function migratePropertiesList(rawProps) {
+  const list = rawProps && rawProps.length ? rawProps : DEFAULT_PROPERTIES;
+  return list.map((p, i) => {
+    if (typeof p === "string") {
+      return {
+        id: `prop-${i}-${genId()}`,
+        name: p,
+        hostName: "",
+        hostPayoutWeekday: "",
+        hostPayoutWeekend: "",
+        payoutMode: "simples",
+        payoutTiers: [],
+        payoutIncludedGuests: "",
+        payoutExtraPerGuest: "",
+        breakfastFee: "",
+        breakfastUnit: "pessoa",
+        cleaningFee: "",
+        petFeePerDay: "",
+        mapsLink: "",
+        airbnbLink: "",
+        bookingLink: "",
+        photo: "",
+      };
+    }
+    const base = {
+      id: p.id || `prop-${i}-${genId()}`,
+      hostName: "",
+      hostPayoutWeekday: "",
+      hostPayoutWeekend: "",
+      payoutMode: "simples",
+      payoutTiers: [],
+      payoutIncludedGuests: "",
+      payoutExtraPerGuest: "",
+      breakfastFee: "",
+      breakfastUnit: "pessoa",
+      cleaningFee: "",
+      petFeePerDay: "",
+      mapsLink: "",
+      airbnbLink: "",
+      bookingLink: "",
+      photo: "",
+      ...p,
+    };
+    // migração: imóveis antigos tinham um único "hostPayout"
+    if (
+      base.hostPayout !== undefined &&
+      base.hostPayout !== "" &&
+      base.hostPayoutWeekday === ""
+    ) {
+      base.hostPayoutWeekday = base.hostPayout;
+    }
+    delete base.hostPayout;
+    return base;
+  });
+}
+
 export default function App() {
   const [properties, setProperties] = useState(DEFAULT_PROPERTIES);
   const [reservations, setReservations] = useState([]);
@@ -378,44 +439,7 @@ export default function App() {
           .single();
         if (mounted && !error && data && data.payload) {
           const parsed = data.payload;
-          const rawProps =
-            parsed.properties && parsed.properties.length
-              ? parsed.properties
-              : DEFAULT_PROPERTIES;
-          const migrated = rawProps.map((p, i) => {
-            if (typeof p === "string") {
-              return {
-                id: `prop-${i}-${genId()}`,
-                name: p,
-                hostName: "",
-                hostPayoutWeekday: "",
-                hostPayoutWeekend: "",
-                cleaningFee: "",
-                petFeePerDay: "",
-                mapsLink: "",
-              };
-            }
-            const base = {
-              hostName: "",
-              hostPayoutWeekday: "",
-              hostPayoutWeekend: "",
-              cleaningFee: "",
-              petFeePerDay: "",
-              mapsLink: "",
-              ...p,
-            };
-            // migração: imóveis antigos tinham um único "hostPayout"
-            if (
-              base.hostPayout !== undefined &&
-              base.hostPayout !== "" &&
-              base.hostPayoutWeekday === ""
-            ) {
-              base.hostPayoutWeekday = base.hostPayout;
-            }
-            delete base.hostPayout;
-            return base;
-          });
-          setProperties(migrated);
+          setProperties(migratePropertiesList(parsed.properties));
           setReservations(parsed.reservations || []);
         }
       } catch (e) {
@@ -430,6 +454,10 @@ export default function App() {
   }, [authed]);
 
   // Grava no banco (Supabase) e confere que a resposta veio sem erro.
+  // Usa upsert (em vez de update) para garantir que os dados sejam salvos
+  // mesmo se a linha "singleton" ainda não existir na tabela — com update
+  // puro, a ausência da linha não gera erro, mas também não salva nada,
+  // e o app mostraria "salvo ✓" mesmo tendo perdido os dados.
   async function persist(nextProperties, nextReservations) {
     const payload = {
       properties: nextProperties,
@@ -438,8 +466,7 @@ export default function App() {
     try {
       const { error } = await supabase
         .from("app_data")
-        .update({ payload, updated_at: new Date().toISOString() })
-        .eq("id", "singleton");
+        .upsert({ id: "singleton", payload, updated_at: new Date().toISOString() });
       if (error) {
         setStorageError(true);
         return false;
@@ -467,10 +494,11 @@ export default function App() {
       if (!parsed || !Array.isArray(parsed.properties) || !Array.isArray(parsed.reservations)) {
         throw new Error("formato inválido");
       }
-      setProperties(parsed.properties);
+      const migratedProperties = migratePropertiesList(parsed.properties);
+      setProperties(migratedProperties);
       setReservations(parsed.reservations);
       setBackupModal(null);
-      const ok = await persist(parsed.properties, parsed.reservations);
+      const ok = await persist(migratedProperties, parsed.reservations);
       setToast(
         ok
           ? { type: "success", message: "Backup importado e salvo ✓" }
