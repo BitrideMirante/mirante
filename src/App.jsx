@@ -363,6 +363,114 @@ function migratePropertiesList(rawProps) {
   });
 }
 
+// ---------------------------------------------------------------------
+// Mapeamento entre o formato usado na tela (camelCase, "" para vazio) e
+// as tabelas normalizadas do Supabase (snake_case, null para vazio).
+// Isso mantém todo o resto do app (telas, cálculos, filtros) inalterado —
+// só a gravação/leitura muda de "1 JSON gigante" para "linhas de tabela".
+// ---------------------------------------------------------------------
+function numOrNull(v) {
+  if (v === "" || v === undefined || v === null) return null;
+  const n = Number(v);
+  return Number.isNaN(n) ? null : n;
+}
+function nullToEmpty(v) {
+  return v === null || v === undefined ? "" : v;
+}
+
+function propertyToRow(p) {
+  return {
+    id: p.id,
+    name: p.name,
+    host_name: p.hostName || "",
+    host_payout_weekday: numOrNull(p.hostPayoutWeekday),
+    host_payout_weekend: numOrNull(p.hostPayoutWeekend),
+    payout_mode: p.payoutMode || "simples",
+    payout_tiers: p.payoutTiers || [],
+    payout_included_guests: numOrNull(p.payoutIncludedGuests),
+    payout_extra_per_guest: numOrNull(p.payoutExtraPerGuest),
+    breakfast_fee: numOrNull(p.breakfastFee),
+    breakfast_unit: p.breakfastUnit || "pessoa",
+    cleaning_fee: numOrNull(p.cleaningFee),
+    pet_fee_per_day: numOrNull(p.petFeePerDay),
+    maps_link: p.mapsLink || "",
+    airbnb_link: p.airbnbLink || "",
+    booking_link: p.bookingLink || "",
+    photo: p.photo || "",
+  };
+}
+
+function rowToProperty(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    hostName: row.host_name || "",
+    hostPayoutWeekday: nullToEmpty(row.host_payout_weekday),
+    hostPayoutWeekend: nullToEmpty(row.host_payout_weekend),
+    payoutMode: row.payout_mode || "simples",
+    payoutTiers: row.payout_tiers || [],
+    payoutIncludedGuests: nullToEmpty(row.payout_included_guests),
+    payoutExtraPerGuest: nullToEmpty(row.payout_extra_per_guest),
+    breakfastFee: nullToEmpty(row.breakfast_fee),
+    breakfastUnit: row.breakfast_unit || "pessoa",
+    cleaningFee: nullToEmpty(row.cleaning_fee),
+    petFeePerDay: nullToEmpty(row.pet_fee_per_day),
+    mapsLink: row.maps_link || "",
+    airbnbLink: row.airbnb_link || "",
+    bookingLink: row.booking_link || "",
+    photo: row.photo || "",
+  };
+}
+
+// `properties` é a lista atual em memória — usada para resolver o nome do
+// imóvel (como a tela usa) para o property_id (como o banco usa).
+function reservationToRow(r, properties) {
+  const prop = properties.find((p) => p.name === r.propertyName);
+  return {
+    id: r.id,
+    property_id: prop ? prop.id : null,
+    channel: r.channel,
+    check_in: r.checkIn,
+    check_out: r.checkOut,
+    guest_name: r.guestName || "",
+    guest_contact: r.guestContact || "",
+    value: Number(r.value) || 0,
+    net_received: numOrNull(r.netReceived),
+    commission_rate: numOrNull(r.commissionRate),
+    host_payout: numOrNull(r.hostPayout),
+    discount_rate: numOrNull(r.discountRate) ?? 0,
+    notes: r.notes || "",
+    guest_count: numOrNull(r.guests),
+    pet_count: numOrNull(r.pets),
+    breakfast: !!r.breakfast,
+    payment_status: r.paymentStatus || null,
+    booking_commission_amount: numOrNull(r.bookingCommissionAmount),
+  };
+}
+
+function rowToReservation(row, idToName) {
+  return {
+    id: row.id,
+    propertyName: idToName.get(row.property_id) || "",
+    channel: row.channel,
+    checkIn: row.check_in,
+    checkOut: row.check_out,
+    guestName: row.guest_name || "",
+    guestContact: row.guest_contact || "",
+    value: row.value,
+    netReceived: nullToEmpty(row.net_received),
+    commissionRate: nullToEmpty(row.commission_rate),
+    hostPayout: nullToEmpty(row.host_payout),
+    discountRate: row.discount_rate || 0,
+    notes: row.notes || "",
+    guests: nullToEmpty(row.guest_count),
+    pets: nullToEmpty(row.pet_count),
+    breakfast: !!row.breakfast,
+    paymentStatus: row.payment_status || "pendente",
+    bookingCommissionAmount: nullToEmpty(row.booking_commission_amount),
+  };
+}
+
 export default function App() {
   const [properties, setProperties] = useState(DEFAULT_PROPERTIES);
   const [reservations, setReservations] = useState([]);
@@ -432,18 +540,29 @@ export default function App() {
     let mounted = true;
     (async () => {
       try {
-        const { data, error } = await supabase
-          .from("app_data")
-          .select("payload")
-          .eq("id", "singleton")
-          .single();
-        if (mounted && !error && data && data.payload) {
-          const parsed = data.payload;
-          setProperties(migratePropertiesList(parsed.properties));
-          setReservations(parsed.reservations || []);
+        const { data: propRows, error: propErr } = await supabase
+          .from("properties")
+          .select("*")
+          .order("name");
+        if (propErr) throw propErr;
+
+        const loadedProperties = migratePropertiesList((propRows || []).map(rowToProperty));
+        const idToName = new Map((propRows || []).map((row) => [row.id, row.name]));
+
+        const { data: resRows, error: resErr } = await supabase
+          .from("reservations")
+          .select("*")
+          .order("check_in");
+        if (resErr) throw resErr;
+
+        const loadedReservations = (resRows || []).map((row) => rowToReservation(row, idToName));
+
+        if (mounted) {
+          setProperties(loadedProperties);
+          setReservations(loadedReservations);
         }
       } catch (e) {
-        // sem dados ainda, mantém os padrões
+        // sem dados ainda, ou erro de leitura — mantém os padrões
       } finally {
         if (mounted) setLoaded(true);
       }
@@ -453,32 +572,10 @@ export default function App() {
     };
   }, [authed]);
 
-  // Grava no banco (Supabase) e confere que a resposta veio sem erro.
-  // Usa upsert (em vez de update) para garantir que os dados sejam salvos
-  // mesmo se a linha "singleton" ainda não existir na tabela — com update
-  // puro, a ausência da linha não gera erro, mas também não salva nada,
-  // e o app mostraria "salvo ✓" mesmo tendo perdido os dados.
-  async function persist(nextProperties, nextReservations) {
-    const payload = {
-      properties: nextProperties,
-      reservations: nextReservations,
-    };
-    try {
-      const { error } = await supabase
-        .from("app_data")
-        .upsert({ id: "singleton", payload, updated_at: new Date().toISOString() });
-      if (error) {
-        setStorageError(true);
-        return false;
-      }
-      setStorageError(false);
-      return true;
-    } catch (e) {
-      setStorageError(true);
-      return false;
-    }
-  }
-
+  // Cada ação (criar/editar/excluir 1 reserva ou 1 imóvel) grava só a linha
+  // afetada na tabela correspondente — não reescreve mais o app inteiro a
+  // cada salvamento. Isso é o que resolve o risco de concorrência e de um
+  // registro corrompido derrubar o app inteiro.
   // Abre um modal com o backup em texto (JSON) para copiar. Mais confiável
   // que download de arquivo dentro do ambiente do artifact, e funciona no celular.
   function exportData() {
@@ -486,8 +583,12 @@ export default function App() {
     setBackupModal({ mode: "export", text: payload });
   }
 
-  // Recebe o texto colado pelo usuário, valida e substitui os dados atuais,
-  // gravando em seguida no armazenamento (com a mesma checagem de persist()).
+  // Importar um backup substitui TUDO: apaga as linhas atuais das duas
+  // tabelas e insere de novo a partir do texto colado. É a única operação
+  // que continua sendo "tudo de uma vez" — faz sentido aqui, já que a
+  // intenção de quem importa um backup é reconstituir o estado inteiro.
+  // Reservas são apagadas antes dos imóveis por causa da referência entre
+  // as tabelas (uma reserva sempre aponta para um imóvel existente).
   async function importData(text) {
     try {
       const parsed = JSON.parse(text);
@@ -495,10 +596,24 @@ export default function App() {
         throw new Error("formato inválido");
       }
       const migratedProperties = migratePropertiesList(parsed.properties);
+      const migratedReservations = parsed.reservations;
       setProperties(migratedProperties);
-      setReservations(parsed.reservations);
+      setReservations(migratedReservations);
       setBackupModal(null);
-      const ok = await persist(migratedProperties, parsed.reservations);
+
+      const { error: delResErr } = await supabase.from("reservations").delete().neq("id", "");
+      const { error: delPropErr } = await supabase.from("properties").delete().neq("id", "");
+      const { error: insPropErr } = migratedProperties.length
+        ? await supabase.from("properties").insert(migratedProperties.map(propertyToRow))
+        : { error: null };
+      const { error: insResErr } = migratedReservations.length
+        ? await supabase
+            .from("reservations")
+            .insert(migratedReservations.map((r) => reservationToRow(r, migratedProperties)))
+        : { error: null };
+
+      const ok = !delResErr && !delPropErr && !insPropErr && !insResErr;
+      setStorageError(!ok);
       setToast(
         ok
           ? { type: "success", message: "Backup importado e salvo ✓" }
@@ -516,18 +631,24 @@ export default function App() {
   }
 
   async function upsertReservation(resv) {
+    const isNew = !resv.id;
+    const finalResv = isNew ? { ...resv, id: genId() } : resv;
     let updated;
-    if (resv.id) {
+    if (!isNew) {
       updated = reservations.map((r) => (r.id === resv.id ? resv : r));
     } else {
-      updated = [...reservations, { ...resv, id: genId() }];
+      updated = [...reservations, finalResv];
     }
     updated.sort((a, b) => (a.checkIn < b.checkIn ? -1 : 1));
     setReservations(updated);
     setShowForm(false);
     setEditing(null);
     setSelectedProperty("Todos");
-    const ok = await persist(properties, updated);
+    const { error } = await supabase
+      .from("reservations")
+      .upsert(reservationToRow(finalResv, properties));
+    const ok = !error;
+    setStorageError(!ok);
     setToast(
       ok
         ? { type: "success", message: "Reserva salva ✓" }
@@ -543,7 +664,9 @@ export default function App() {
     const updated = reservations.filter((r) => r.id !== id);
     setReservations(updated);
     setConfirmDeleteId(null);
-    const ok = await persist(properties, updated);
+    const { error } = await supabase.from("reservations").delete().eq("id", id);
+    const ok = !error;
+    setStorageError(!ok);
     setToast(
       ok
         ? { type: "success", message: "Reserva excluída ✓" }
@@ -557,12 +680,29 @@ export default function App() {
   async function addProperty(name) {
     const clean = name.trim();
     if (!clean || properties.some((p) => p.name === clean)) return;
-    const updated = [
-      ...properties,
-      { id: genId(), name: clean, hostName: "", hostPayoutWeekday: "", hostPayoutWeekend: "", payoutMode: "simples", payoutTiers: [], payoutIncludedGuests: "", payoutExtraPerGuest: "", breakfastFee: "", breakfastUnit: "pessoa", cleaningFee: "", petFeePerDay: "", mapsLink: "", airbnbLink: "", bookingLink: "", photo: "" },
-    ];
-    setProperties(updated);
-    const ok = await persist(updated, reservations);
+    const newProp = {
+      id: genId(),
+      name: clean,
+      hostName: "",
+      hostPayoutWeekday: "",
+      hostPayoutWeekend: "",
+      payoutMode: "simples",
+      payoutTiers: [],
+      payoutIncludedGuests: "",
+      payoutExtraPerGuest: "",
+      breakfastFee: "",
+      breakfastUnit: "pessoa",
+      cleaningFee: "",
+      petFeePerDay: "",
+      mapsLink: "",
+      airbnbLink: "",
+      bookingLink: "",
+      photo: "",
+    };
+    setProperties([...properties, newProp]);
+    const { error } = await supabase.from("properties").insert(propertyToRow(newProp));
+    const ok = !error;
+    setStorageError(!ok);
     setToast(
       ok
         ? { type: "success", message: "Imóvel salvo ✓" }
@@ -573,24 +713,22 @@ export default function App() {
     );
   }
 
-  async function upsertProperty(propObj, oldName) {
-    let updatedProperties;
-    let updatedReservations = reservations;
-    if (propObj.id && properties.some((p) => p.id === propObj.id)) {
-      updatedProperties = properties.map((p) => (p.id === propObj.id ? propObj : p));
-      if (oldName && oldName !== propObj.name) {
-        updatedReservations = reservations.map((r) =>
-          r.propertyName === oldName ? { ...r, propertyName: propObj.name } : r
-        );
-        setReservations(updatedReservations);
-      }
-    } else {
-      updatedProperties = [...properties, { ...propObj, id: genId() }];
-    }
+  // Nota: como as reservas agora se ligam ao imóvel por id (não por nome),
+  // renomear um imóvel aqui não precisa mais tocar nas reservas — elas
+  // continuam apontando para o mesmo id e mostram o nome novo automaticamente
+  // assim que a lista de imóveis é recarregada.
+  async function upsertProperty(propObj) {
+    const isNew = !(propObj.id && properties.some((p) => p.id === propObj.id));
+    const finalProp = isNew ? { ...propObj, id: genId() } : propObj;
+    const updatedProperties = isNew
+      ? [...properties, finalProp]
+      : properties.map((p) => (p.id === finalProp.id ? finalProp : p));
     setProperties(updatedProperties);
     setShowPropertyForm(false);
     setEditingProperty(null);
-    const ok = await persist(updatedProperties, updatedReservations);
+    const { error } = await supabase.from("properties").upsert(propertyToRow(finalProp));
+    const ok = !error;
+    setStorageError(!ok);
     setToast(
       ok
         ? { type: "success", message: "Imóvel salvo ✓" }
@@ -617,7 +755,9 @@ export default function App() {
     const updated = properties.filter((p) => p.id !== prop.id);
     setProperties(updated);
     setConfirmDeleteProperty(null);
-    const ok = await persist(updated, reservations);
+    const { error } = await supabase.from("properties").delete().eq("id", prop.id);
+    const ok = !error;
+    setStorageError(!ok);
     setToast(
       ok
         ? { type: "success", message: "Imóvel excluído ✓" }
