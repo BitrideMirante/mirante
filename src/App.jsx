@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, Fragment } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, Fragment } from "react";
 import {
   Plus,
   X,
@@ -2132,6 +2132,13 @@ function CalendarView({
   const [visibleStart, setVisibleStart] = useState(calendarMonth);
   const scrollRef = useRef(null);
   const didInitialScroll = useRef(false);
+  // Quanto ajustar o scrollLeft DEPOIS que o React re-renderizar a janela
+  // com o novo anchor. É aplicado no useLayoutEffect abaixo (sincronamente,
+  // antes do paint), evitando o salto visual de mexer no DOM antigo.
+  const pendingScrollAdjust = useRef(0);
+  // Último dia de início visível já refletido no estado, para evitar
+  // re-render a cada pixel de scroll.
+  const lastVisibleDayMs = useRef(null);
 
   const days = useMemo(() => {
     const arr = [];
@@ -2157,30 +2164,53 @@ function CalendarView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Depois que o anchor muda e o React re-renderiza a nova janela de dias,
+  // aplicamos a compensação de scroll aqui — sincronamente, antes do paint.
+  // Isso mantém o mesmo dia sob os olhos do usuário, sem o salto de 7 dias.
+  useLayoutEffect(() => {
+    if (pendingScrollAdjust.current === 0) return;
+    const el = scrollRef.current;
+    if (el) el.scrollLeft += pendingScrollAdjust.current;
+    pendingScrollAdjust.current = 0;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anchor]);
+
   function handleScroll() {
     const el = scrollRef.current;
     if (!el) return;
+    // Enquanto uma compensação de anchor está pendente, ignoramos o scroll
+    // para não disparar shifts em cascata.
+    if (pendingScrollAdjust.current !== 0) return;
     const scrollLeft = el.scrollLeft;
 
+    // Só atualiza o rótulo/estado quando o dia de início realmente muda,
+    // e não a cada pixel — evita re-render contínuo durante o arrasto.
     const firstVisible = new Date(anchor);
     firstVisible.setDate(firstVisible.getDate() + Math.round(scrollLeft / CELL_WIDTH));
-    setVisibleStart(firstVisible);
+    const firstVisibleMs = firstVisible.getTime();
+    if (firstVisibleMs !== lastVisibleDayMs.current) {
+      lastVisibleDayMs.current = firstVisibleMs;
+      setVisibleStart(firstVisible);
+    }
 
     const maxScroll = el.scrollWidth - el.clientWidth;
     if (scrollLeft < EDGE_THRESHOLD) {
+      // Janela vai crescer 7 dias para a esquerda -> conteúdo desloca +448px.
+      // Marcamos a compensação e deixamos o useLayoutEffect aplicá-la após o
+      // re-render, evitando o salto visual.
+      pendingScrollAdjust.current = SHIFT_DAYS * CELL_WIDTH;
       setAnchor((prev) => {
         const d = new Date(prev);
         d.setDate(d.getDate() - SHIFT_DAYS);
         return d;
       });
-      el.scrollLeft = scrollLeft + SHIFT_DAYS * CELL_WIDTH;
     } else if (maxScroll - scrollLeft < EDGE_THRESHOLD) {
+      pendingScrollAdjust.current = -SHIFT_DAYS * CELL_WIDTH;
       setAnchor((prev) => {
         const d = new Date(prev);
         d.setDate(d.getDate() + SHIFT_DAYS);
         return d;
       });
-      el.scrollLeft = scrollLeft - SHIFT_DAYS * CELL_WIDTH;
     }
   }
 
@@ -2198,6 +2228,7 @@ function CalendarView({
     setAnchor(newAnchor);
     setCalendarMonth(todayDate);
     setVisibleStart(todayDate);
+    lastVisibleDayMs.current = todayDate.getTime();
     requestAnimationFrame(() => {
       if (el) el.scrollLeft = 10 * CELL_WIDTH;
     });
