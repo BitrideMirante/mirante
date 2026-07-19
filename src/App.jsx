@@ -2120,13 +2120,18 @@ function CalendarView({
   onSelectReservation,
   onQuickAdd,
 }) {
-  const WINDOW_DAYS = 28;
+  // Janela ampla (9 semanas) para que, mesmo em telas largas, sobre bastante
+  // espaço de rolagem entre os dois gatilhos de reancoramento. Janelas curtas
+  // faziam a "zona segura" encolher a ponto de a compensação de scroll cair
+  // sempre no gatilho oposto, gerando oscilação (a barra pulava de lado a lado).
+  const WINDOW_DAYS = 63;
   const SHIFT_DAYS = 7;
   const EDGE_THRESHOLD = CELL_WIDTH * 5;
+  const INITIAL_OFFSET = 21; // dias de margem à esquerda do dia de referência
 
   const [anchor, setAnchor] = useState(() => {
     const d = new Date(calendarMonth);
-    d.setDate(d.getDate() - 10);
+    d.setDate(d.getDate() - INITIAL_OFFSET);
     return d;
   });
   const [visibleStart, setVisibleStart] = useState(calendarMonth);
@@ -2195,6 +2200,11 @@ function CalendarView({
 
     const maxScroll = el.scrollWidth - el.clientWidth;
     if (scrollLeft < EDGE_THRESHOLD) {
+      // Só reancora se, após a compensação, o scroll couber dentro da zona
+      // segura (longe do gatilho oposto). Em telas onde a janela seria estreita
+      // demais isso evita o loop de reancoramento (a barra pulando de lado a lado).
+      const projected = scrollLeft + SHIFT_DAYS * CELL_WIDTH;
+      if (projected > maxScroll - EDGE_THRESHOLD) return;
       // Janela vai crescer 7 dias para a esquerda -> conteúdo desloca +448px.
       // Marcamos a compensação e deixamos o useLayoutEffect aplicá-la após o
       // re-render, evitando o salto visual.
@@ -2205,6 +2215,8 @@ function CalendarView({
         return d;
       });
     } else if (maxScroll - scrollLeft < EDGE_THRESHOLD) {
+      const projected = scrollLeft - SHIFT_DAYS * CELL_WIDTH;
+      if (projected < EDGE_THRESHOLD) return;
       pendingScrollAdjust.current = -SHIFT_DAYS * CELL_WIDTH;
       setAnchor((prev) => {
         const d = new Date(prev);
@@ -2224,13 +2236,13 @@ function CalendarView({
     const el = scrollRef.current;
     const todayDate = new Date();
     const newAnchor = new Date(todayDate);
-    newAnchor.setDate(newAnchor.getDate() - 10);
+    newAnchor.setDate(newAnchor.getDate() - INITIAL_OFFSET);
     setAnchor(newAnchor);
     setCalendarMonth(todayDate);
     setVisibleStart(todayDate);
     lastVisibleDayMs.current = todayDate.getTime();
     requestAnimationFrame(() => {
-      if (el) el.scrollLeft = 10 * CELL_WIDTH;
+      if (el) el.scrollLeft = INITIAL_OFFSET * CELL_WIDTH;
     });
   }
 
