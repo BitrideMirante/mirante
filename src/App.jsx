@@ -906,7 +906,7 @@ export default function App() {
 
   return (
     <div style={{ background: TOKENS.sand, minHeight: "100vh" }} className="pb-28">
-      <div className="max-w-xl mx-auto lg:max-w-5xl">
+      <div className={view === "calendario" ? "w-full" : "max-w-xl mx-auto lg:max-w-5xl"}>
       <FontLoader />
       <Toast toast={toast} />
       <Header view={view} onMenuClick={() => setDrawerOpen(true)} />
@@ -1043,7 +1043,7 @@ export default function App() {
       {/* Floating action buttons */}
       {view !== "comissao" && (
         <div className="fixed bottom-6 inset-x-0 z-30 pointer-events-none">
-          <div className="max-w-xl mx-auto flex justify-end pr-5 lg:max-w-5xl">
+          <div className={(view === "calendario" ? "w-full" : "max-w-xl mx-auto lg:max-w-5xl") + " flex justify-end pr-5"}>
             <div className="flex flex-col gap-3 pointer-events-auto">
               <button
                 onClick={() => {
@@ -2259,7 +2259,7 @@ function CalendarView({
   )} ${rangeEnd.getFullYear()}`;
 
   return (
-    <div className="mx-5 mt-2">
+    <div className="mx-2 sm:mx-4 mt-2">
       <div
         className="flex items-center justify-between mb-3 rounded-2xl px-2 py-2"
         style={{ background: TOKENS.cream, border: `1px solid ${TOKENS.sand}` }}
