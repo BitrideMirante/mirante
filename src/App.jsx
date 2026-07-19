@@ -2104,7 +2104,8 @@ function fmtDayMonth(date) {
   return `${String(date.getDate()).padStart(2, "0")} ${MONTH_ABBR[date.getMonth()]}`;
 }
 
-const CELL_WIDTH = 64;
+const CELL_WIDTH = 60;
+const NAME_COL_WIDTH = 104;
 const ROW_HEIGHT = 56;
 // Corte diagonal da barra de reserva: metade da largura do dia, para que o
 // check-out de uma reserva e o check-in da próxima no mesmo dia caibam cada
@@ -2259,7 +2260,7 @@ function CalendarView({
   )} ${rangeEnd.getFullYear()}`;
 
   return (
-    <div className="mx-2 sm:mx-4 mt-2">
+    <div className="mx-0 sm:mx-4 mt-2">
       <div
         className="flex items-center justify-between mb-3 rounded-2xl px-2 py-2"
         style={{ background: TOKENS.cream, border: `1px solid ${TOKENS.sand}` }}
@@ -2312,8 +2313,8 @@ function CalendarView({
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: `120px repeat(${days.length}, ${CELL_WIDTH}px)`,
-              minWidth: 120 + days.length * CELL_WIDTH,
+              gridTemplateColumns: `${NAME_COL_WIDTH}px repeat(${days.length}, ${CELL_WIDTH}px)`,
+              minWidth: NAME_COL_WIDTH + days.length * CELL_WIDTH,
             }}
           >
             {/* corner cell */}
