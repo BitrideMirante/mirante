@@ -53,6 +53,7 @@ const DEFAULT_PROPERTIES = DEFAULT_PROPERTY_NAMES.map((name, i) => ({
   breakfastUnit: "pessoa", // "pessoa" | "casal"
   cleaningFee: "",
   petFeePerDay: "",
+  spaFeePerDay: "", // R$ por diária; vazio = não oferece spa
   mapsLink: "",
   airbnbLink: "",
   bookingLink: "",
@@ -185,7 +186,7 @@ function payoutRatesFor(property, guests) {
 // escolhendo os valores conforme o nº de hóspedes (faixas ou adicional).
 // O desconto da reserva (fração, ex: 0.1) é aplicado nas diárias do repasse
 // — o dono absorve o mesmo percentual. Café da manhã soma por fora, sem desconto.
-function suggestedHostPayout(property, checkIn, checkOut, guests, breakfast, discount, pets) {
+function suggestedHostPayout(property, checkIn, checkOut, guests, breakfast, discount, pets, spa) {
   if (!property || !checkIn || !checkOut || checkOut <= checkIn) return null;
   const rates = payoutRatesFor(property, guests);
   if (!rates) return null;
@@ -219,6 +220,10 @@ function suggestedHostPayout(property, checkIn, checkOut, guests, breakfast, dis
   const petCount = Number(pets) || 0;
   if (petCount > 0 && property.petFeePerDay !== "" && property.petFeePerDay !== undefined && property.petFeePerDay !== null) {
     total += (Number(property.petFeePerDay) || 0) * petCount * nights;
+  }
+  // Taxa de spa: por diária quando usado, sem desconto.
+  if (spa && property.spaFeePerDay !== "" && property.spaFeePerDay !== undefined && property.spaFeePerDay !== null) {
+    total += (Number(property.spaFeePerDay) || 0) * nights;
   }
   return total;
 }
@@ -325,6 +330,7 @@ function migratePropertiesList(rawProps) {
         breakfastUnit: "pessoa",
         cleaningFee: "",
         petFeePerDay: "",
+        spaFeePerDay: "",
         mapsLink: "",
         airbnbLink: "",
         bookingLink: "",
@@ -344,6 +350,7 @@ function migratePropertiesList(rawProps) {
       breakfastUnit: "pessoa",
       cleaningFee: "",
       petFeePerDay: "",
+      spaFeePerDay: "",
       mapsLink: "",
       airbnbLink: "",
       bookingLink: "",
@@ -393,6 +400,7 @@ function propertyToRow(p) {
     breakfast_unit: p.breakfastUnit || "pessoa",
     cleaning_fee: numOrNull(p.cleaningFee),
     pet_fee_per_day: numOrNull(p.petFeePerDay),
+    spa_fee_per_day: numOrNull(p.spaFeePerDay),
     maps_link: p.mapsLink || "",
     airbnb_link: p.airbnbLink || "",
     booking_link: p.bookingLink || "",
@@ -415,6 +423,7 @@ function rowToProperty(row) {
     breakfastUnit: row.breakfast_unit || "pessoa",
     cleaningFee: nullToEmpty(row.cleaning_fee),
     petFeePerDay: nullToEmpty(row.pet_fee_per_day),
+    spaFeePerDay: nullToEmpty(row.spa_fee_per_day),
     mapsLink: row.maps_link || "",
     airbnbLink: row.airbnb_link || "",
     bookingLink: row.booking_link || "",
@@ -443,6 +452,7 @@ function reservationToRow(r, properties) {
     guest_count: numOrNull(r.guests),
     pet_count: numOrNull(r.pets),
     breakfast: !!r.breakfast,
+    spa: !!r.spa,
     payment_status: r.paymentStatus || null,
     booking_commission_amount: numOrNull(r.bookingCommissionAmount),
   };
@@ -466,6 +476,7 @@ function rowToReservation(row, idToName) {
     guests: nullToEmpty(row.guest_count),
     pets: nullToEmpty(row.pet_count),
     breakfast: !!row.breakfast,
+    spa: !!row.spa,
     paymentStatus: row.payment_status || "pendente",
     bookingCommissionAmount: nullToEmpty(row.booking_commission_amount),
   };
@@ -694,6 +705,7 @@ export default function App() {
       breakfastUnit: "pessoa",
       cleaningFee: "",
       petFeePerDay: "",
+      spaFeePerDay: "",
       mapsLink: "",
       airbnbLink: "",
       bookingLink: "",
@@ -1991,6 +2003,9 @@ function ReservationList({ reservations, onEdit, onDelete }) {
                     {" "}· 🐾 {r.pets} pet{Number(r.pets) === 1 ? "" : "s"}
                   </span>
                 )}
+                {r.spa && (
+                  <span className="text-xs font-normal" style={{ color: TOKENS.moss }}> · 🛁 com spa</span>
+                )}
               </p>
               <p className="font-display text-lg mt-1.5" style={{ color: TOKENS.ink }}>
                 {r.channel === "airbnb" ? (
@@ -2613,6 +2628,7 @@ function ReservationForm({ properties, initial, onAddProperty, onCancel, onSave 
   const [guests, setGuests] = useState(initial?.guests ?? "");
   const [pets, setPets] = useState(initial?.pets ?? "");
   const [breakfast, setBreakfast] = useState(initial?.breakfast || false);
+  const [spa, setSpa] = useState(initial?.spa || false);
   const [checkOut, setCheckOut] = useState(initial?.checkOut || "");
   const [value, setValue] = useState(initial?.value ?? "");
   const [netReceived, setNetReceived] = useState(initial?.netReceived ?? "");
@@ -2680,7 +2696,8 @@ function ReservationForm({ properties, initial, onAddProperty, onCancel, onSave 
     guests,
     breakfast,
     isAirbnb || isBooking ? 0 : (Number(discountRate) || 0) / 100,
-    pets
+    pets,
+    spa
   );
   useEffect(() => {
     if (!hostPayoutTouched && !isAirbnb) {
@@ -2711,6 +2728,7 @@ function ReservationForm({ properties, initial, onAddProperty, onCancel, onSave 
       guests: guests === "" ? "" : Math.max(Math.round(Number(guests)) || 0, 1),
       pets: pets === "" ? "" : Math.max(Math.round(Number(pets)) || 0, 0),
       breakfast,
+      spa,
       value: Number(value) || 0,
       netReceived: isAirbnb ? Number(netReceived) || 0 : isBooking ? bookingNetReceived : 0,
       bookingCommissionAmount: isBooking ? Number(bookingCommissionAmount) || 0 : 0,
@@ -2831,6 +2849,23 @@ function ReservationForm({ properties, initial, onAddProperty, onCancel, onSave 
             />
             Com café da manhã ({fmtMoney(selectedPropObj.breakfastFee)}/
             {selectedPropObj.breakfastUnit === "casal" ? "casal" : "pessoa"} por diária)
+          </label>
+        )}
+
+      {selectedPropObj &&
+        selectedPropObj.spaFeePerDay !== "" &&
+        selectedPropObj.spaFeePerDay !== undefined &&
+        selectedPropObj.spaFeePerDay !== null && (
+          <label
+            className="font-body text-sm flex items-center gap-2 mb-3 cursor-pointer"
+            style={{ color: TOKENS.ink }}
+          >
+            <input
+              type="checkbox"
+              checked={spa}
+              onChange={(e) => setSpa(e.target.checked)}
+            />
+            Com spa ({fmtMoney(selectedPropObj.spaFeePerDay)} por diária)
           </label>
         )}
 
@@ -3235,6 +3270,11 @@ function PropertiesManager({ properties, deleteError, onEdit, onDeleteRequest })
               Não aceita pets
             </p>
           )}
+          {p.spaFeePerDay !== "" && p.spaFeePerDay !== undefined && p.spaFeePerDay !== null && (
+            <p className="font-body text-[13.5px] mt-0.5" style={{ color: TOKENS.moss }}>
+              Taxa de spa: <b style={{ color: TOKENS.ink }}>{fmtMoney(p.spaFeePerDay)}</b> / diária
+            </p>
+          )}
           <div
             className="flex flex-wrap gap-4 mt-3 pt-3"
             style={{ borderTop: `1px solid ${TOKENS.sand}` }}
@@ -3312,6 +3352,7 @@ function PropertyForm({ initial, properties, onCancel, onSave }) {
   const [breakfastUnit, setBreakfastUnit] = useState(initial?.breakfastUnit || "pessoa");
   const [cleaningFee, setCleaningFee] = useState(initial?.cleaningFee ?? "");
   const [petFeePerDay, setPetFeePerDay] = useState(initial?.petFeePerDay ?? "");
+  const [spaFeePerDay, setSpaFeePerDay] = useState(initial?.spaFeePerDay ?? "");
   const [mapsLink, setMapsLink] = useState(initial?.mapsLink || "");
   const [airbnbLink, setAirbnbLink] = useState(initial?.airbnbLink || "");
   const [bookingLink, setBookingLink] = useState(initial?.bookingLink || "");
@@ -3383,6 +3424,7 @@ function PropertyForm({ initial, properties, onCancel, onSave }) {
         breakfastUnit,
         cleaningFee: cleaningFee === "" ? "" : Number(cleaningFee) || 0,
         petFeePerDay: petFeePerDay === "" ? "" : Number(petFeePerDay) || 0,
+        spaFeePerDay: spaFeePerDay === "" ? "" : Number(spaFeePerDay) || 0,
         mapsLink: normalizeUrl(mapsLink),
         airbnbLink: normalizeUrl(airbnbLink),
         bookingLink: normalizeUrl(bookingLink),
@@ -3617,6 +3659,19 @@ function PropertyForm({ initial, properties, onCancel, onSave }) {
       </Field>
       <p className="font-body text-sm -mt-2 mb-3" style={{ color: TOKENS.moss }}>
         Deixe vazio se o imóvel não aceita pets.
+      </p>
+
+      <Field label="Taxa de spa · por diária (R$)">
+        <input
+          type="number"
+          inputMode="decimal"
+          style={inputStyle}
+          value={spaFeePerDay}
+          onChange={(e) => setSpaFeePerDay(e.target.value)}
+        />
+      </Field>
+      <p className="font-body text-sm -mt-2 mb-3" style={{ color: TOKENS.moss }}>
+        Deixe vazio se o imóvel não oferece spa.
       </p>
 
       <Field label="Link do Google Maps">
