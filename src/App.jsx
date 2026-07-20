@@ -2631,6 +2631,9 @@ function ReservationForm({ properties, initial, onAddProperty, onCancel, onSave 
   const [spa, setSpa] = useState(initial?.spa || false);
   const [checkOut, setCheckOut] = useState(initial?.checkOut || "");
   const [value, setValue] = useState(initial?.value ?? "");
+  const [valueTouched, setValueTouched] = useState(
+    Boolean(initial && initial.value !== "" && initial.value !== undefined && initial.value !== null)
+  );
   const [netReceived, setNetReceived] = useState(initial?.netReceived ?? "");
   const [bookingCommissionAmount, setBookingCommissionAmount] = useState(
     initial?.bookingCommissionAmount ??
@@ -2704,6 +2707,20 @@ function ReservationForm({ properties, initial, onAddProperty, onCancel, onSave 
       setHostPayout(suggestedPayout === null ? "" : suggestedPayout);
     }
   }, [suggestedPayout, hostPayoutTouched, isAirbnb]);
+
+  // Valor final sugerido ao hóspede: repasse ao dono + 15% de markup.
+  // Esse markup mantém sua comissão (~13% do total) sem mexer no repasse.
+  // É só uma sugestão: você pode sobrescrever quando a demanda permite cobrar mais.
+  const DIRECT_MARKUP = 0.15;
+  const suggestedValue =
+    !isAirbnb && !isBooking && hostPayout !== "" && Number(hostPayout) > 0
+      ? Math.round(Number(hostPayout) * (1 + DIRECT_MARKUP) * 100) / 100
+      : null;
+  useEffect(() => {
+    if (!valueTouched && !isAirbnb && !isBooking && suggestedValue !== null) {
+      setValue(suggestedValue);
+    }
+  }, [suggestedValue, valueTouched, isAirbnb, isBooking]);
 
   function handleSubmit() {
     const finalProperty = newPropertyMode ? newPropertyName.trim() : propertyName;
@@ -3032,9 +3049,25 @@ function ReservationForm({ properties, initial, onAddProperty, onCancel, onSave 
               inputMode="decimal"
               style={inputStyle}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(e) => {
+                setValue(e.target.value);
+                setValueTouched(true);
+              }}
             />
           </Field>
+          {suggestedValue !== null && Number(value) !== suggestedValue && (
+            <button
+              type="button"
+              onClick={() => {
+                setValue(suggestedValue);
+                setValueTouched(true);
+              }}
+              className="font-body text-xs px-3 py-1.5 rounded-full mb-3 -mt-1"
+              style={{ background: TOKENS.sand, color: TOKENS.pine }}
+            >
+              Sugerido: {fmtMoney(suggestedValue)} — usar
+            </button>
+          )}
 
           <Field label="Repasse ao anfitrião (R$)">
             <input
