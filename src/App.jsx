@@ -258,6 +258,70 @@ function genId() {
   return "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+// Decompõe o repasse de uma reserva nos seus componentes (para o relatório do
+// dono). NÃO altera o repasse congelado — apenas o recalcula por partes com as
+// taxas atuais do imóvel. Se a soma das partes não fechar com o repasse real
+// (repasse editado à mão ou taxa do imóvel alterada depois), a diferença sai
+// como "adjust", para o total sempre bater. Retorna null para Airbnb.
+function payoutBreakdown(r, property) {
+  const frozen = payoutForReservation(r);
+  if (frozen === null || !property) return null;
+  const nights = nightsBetween(r.checkIn, r.checkOut);
+  const rates = payoutRatesFor(property, r.guests);
+  let dailies = 0;
+  if (rates) {
+    const wk = rates.weekday;
+    const we = rates.weekend;
+    let cur = r.checkIn;
+    while (cur < r.checkOut) {
+      const useWe = isWeekendNight(cur);
+      const rate = useWe
+        ? (we === "" || we === undefined ? wk : we)
+        : (wk === "" || wk === undefined ? we : wk);
+      dailies += Number(rate) || 0;
+      cur = addDaysISO(cur, 1);
+    }
+    const d = Number(r.discountRate) || 0;
+    if (d > 0 && d <= 1) dailies = dailies * (1 - d);
+  }
+  const cleaning =
+    property.cleaningFee !== "" && property.cleaningFee !== undefined && property.cleaningFee !== null
+      ? Number(property.cleaningFee) || 0
+      : 0;
+  let breakfast = 0;
+  if (r.breakfast && property.breakfastFee !== "" && property.breakfastFee !== undefined && property.breakfastFee !== null) {
+    const fee = Number(property.breakfastFee) || 0;
+    const g = Math.max(Number(r.guests) || 1, 1);
+    const units = property.breakfastUnit === "casal" ? Math.ceil(g / 2) : g;
+    breakfast = fee * units * nights;
+  }
+  let pet = 0;
+  const petCount = Number(r.pets) || 0;
+  if (petCount > 0 && property.petFeePerDay !== "" && property.petFeePerDay !== undefined && property.petFeePerDay !== null) {
+    pet = (Number(property.petFeePerDay) || 0) * petCount * nights;
+  }
+  let spa = 0;
+  if (r.spa && property.spaFeePerDay !== "" && property.spaFeePerDay !== undefined && property.spaFeePerDay !== null) {
+    spa = (Number(property.spaFeePerDay) || 0) * nights;
+  }
+  const computed = dailies + cleaning + breakfast + pet + spa;
+  const adjust = Math.round((frozen - computed) * 100) / 100;
+  return { nights, guests: r.guests, dailies, cleaning, breakfast, pet, spa, frozen, adjust };
+}
+
+// Linhas de detalhe do repasse (label + valor), só com o que existe naquela
+// reserva. Usado tanto no texto (WhatsApp) quanto na versão visual/impressa.
+function payoutDetailLines(bd) {
+  const plural = (n) => (n === 1 ? "" : "s");
+  const lines = [{ label: `Diárias (${bd.nights} noite${plural(bd.nights)})`, value: bd.dailies }];
+  if (bd.cleaning > 0) lines.push({ label: "Limpeza", value: bd.cleaning });
+  if (bd.breakfast > 0) lines.push({ label: "Café da manhã", value: bd.breakfast });
+  if (bd.pet > 0) lines.push({ label: `Pet (${bd.nights} diária${plural(bd.nights)})`, value: bd.pet });
+  if (bd.spa > 0) lines.push({ label: `Spa (${bd.nights} diária${plural(bd.nights)})`, value: bd.spa });
+  if (Math.abs(bd.adjust) >= 0.01) lines.push({ label: "Ajuste", value: bd.adjust });
+  return lines;
+}
+
 // Sempre usa os componentes de data LOCAIS (nunca toISOString/UTC), para não
 // desalinhar o calendário dependendo do horário/fuso em que o app é usado.
 function dateToISO(date) {
@@ -1484,6 +1548,39 @@ function CommissionView({ reservations }) {
   );
 }
 
+function OwnerReservationRow({ r, properties }) {
+  const nights = nightsBetween(r.checkIn, r.checkOut);
+  const p = payoutForReservation(r);
+  const g = Number(r.guests) || 0;
+  const guestsPart = g > 0 ? ` · ${g} hóspede${g === 1 ? "" : "s"}` : "";
+  const prop = properties.find((x) => x.name === r.propertyName) || null;
+  const bd = p === null ? null : payoutBreakdown(r, prop);
+  return (
+    <div
+      className="font-body text-sm pb-1.5"
+      style={{ color: TOKENS.ink, borderBottom: `1px solid ${TOKENS.sand}` }}
+    >
+      <div className="flex justify-between">
+        <span>
+          {fmtDateBR(r.checkIn)} a {fmtDateBR(r.checkOut)} ({nights} noite
+          {nights === 1 ? "" : "s"}){guestsPart} · {r.guestName}
+        </span>
+        <b className="shrink-0 ml-2">{p === null ? "via Airbnb" : fmtMoney(p)}</b>
+      </div>
+      {bd && (
+        <div className="mt-0.5 pl-3" style={{ color: TOKENS.moss }}>
+          {payoutDetailLines(bd).map((l, i) => (
+            <div key={i} className="flex justify-between text-[13px]">
+              <span>{l.label}</span>
+              <span>{fmtMoney(l.value)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReportsView({ reservations, properties }) {
   const [monthDate, setMonthDate] = useState(new Date());
   const [reportProperty, setReportProperty] = useState("");
@@ -1570,32 +1667,37 @@ function ReportsView({ reservations, properties }) {
     if (!isOwnerReport && ownerProp && ownerProp.hostName)
       lines.push(`Anfitrião: ${ownerProp.hostName}`);
     lines.push("");
+    // Linhas de uma reserva: cabeçalho + detalhamento do repasse.
+    const resLines = (r) => {
+      const nights = nightsBetween(r.checkIn, r.checkOut);
+      const p = payoutForReservation(r);
+      const g = Number(r.guests) || 0;
+      const guestsPart = g > 0 ? ` · ${g} hóspede${g === 1 ? "" : "s"}` : "";
+      const header = `• ${fmtDateBR(r.checkIn)} a ${fmtDateBR(r.checkOut)} (${nights} noite${
+        nights === 1 ? "" : "s"
+      })${guestsPart} · ${r.guestName}`;
+      if (p === null) return [header + " — pago via Airbnb"];
+      const prop = properties.find((x) => x.name === r.propertyName) || null;
+      const bd = payoutBreakdown(r, prop);
+      const out = [header];
+      if (bd) {
+        payoutDetailLines(bd).forEach((l) => out.push(`    ${l.label}: ${fmtMoney(l.value)}`));
+        out.push(`    Repasse: ${fmtMoney(bd.frozen)}`);
+      } else {
+        out.push(`    Repasse: ${fmtMoney(p)}`);
+      }
+      return out;
+    };
     if (isOwnerReport) {
       groupedByProp.forEach((g) => {
         const subtotal = g.items.reduce((s, r) => s + (payoutForReservation(r) ?? 0), 0);
         lines.push(`${g.name}:`);
-        g.items.forEach((r) => {
-          const nights = nightsBetween(r.checkIn, r.checkOut);
-          const p = payoutForReservation(r);
-          lines.push(
-            `• ${fmtDateBR(r.checkIn)} a ${fmtDateBR(r.checkOut)} (${nights} noite${
-              nights === 1 ? "" : "s"
-            }) — ${r.guestName} — ${p === null ? "pago via Airbnb" : "repasse " + fmtMoney(p)}`
-          );
-        });
+        g.items.forEach((r) => resLines(r).forEach((l) => lines.push(l)));
         lines.push(`Subtotal ${g.name}: ${fmtMoney(subtotal)}`);
         lines.push("");
       });
     } else {
-      ownerReservations.forEach((r) => {
-        const nights = nightsBetween(r.checkIn, r.checkOut);
-        const p = payoutForReservation(r);
-        lines.push(
-          `• ${fmtDateBR(r.checkIn)} a ${fmtDateBR(r.checkOut)} (${nights} noite${
-            nights === 1 ? "" : "s"
-          }) — ${r.guestName} — ${p === null ? "pago via Airbnb" : "repasse " + fmtMoney(p)}`
-        );
-      });
+      ownerReservations.forEach((r) => resLines(r).forEach((l) => lines.push(l)));
       lines.push("");
     }
     lines.push(`Total a repassar: ${fmtMoney(ownerPayoutTotal)}`);
@@ -1770,28 +1872,9 @@ function ReportsView({ reservations, properties }) {
                             {g.name}
                           </p>
                           <div className="flex flex-col gap-2">
-                            {g.items.map((r) => {
-                              const nights = nightsBetween(r.checkIn, r.checkOut);
-                              const p = payoutForReservation(r);
-                              return (
-                                <div
-                                  key={r.id}
-                                  className="flex justify-between font-body text-sm pb-1"
-                                  style={{
-                                    color: TOKENS.ink,
-                                    borderBottom: `1px solid ${TOKENS.sand}`,
-                                  }}
-                                >
-                                  <span>
-                                    {fmtDateBR(r.checkIn)} a {fmtDateBR(r.checkOut)} ({nights}{" "}
-                                    noite{nights === 1 ? "" : "s"}) · {r.guestName}
-                                  </span>
-                                  <b className="shrink-0 ml-2">
-                                    {p === null ? "via Airbnb" : fmtMoney(p)}
-                                  </b>
-                                </div>
-                              );
-                            })}
+                            {g.items.map((r) => (
+                              <OwnerReservationRow key={r.id} r={r} properties={properties} />
+                            ))}
                             <div
                               className="flex justify-between font-body text-sm"
                               style={{ color: TOKENS.moss }}
@@ -1820,25 +1903,9 @@ function ReportsView({ reservations, properties }) {
                   </div>
                 ) : (
                   <div className="mt-3 flex flex-col gap-2">
-                    {ownerReservations.map((r) => {
-                      const nights = nightsBetween(r.checkIn, r.checkOut);
-                      const p = payoutForReservation(r);
-                      return (
-                        <div
-                          key={r.id}
-                          className="flex justify-between font-body text-sm pb-1"
-                          style={{ color: TOKENS.ink, borderBottom: `1px solid ${TOKENS.sand}` }}
-                        >
-                          <span>
-                            {fmtDateBR(r.checkIn)} a {fmtDateBR(r.checkOut)} ({nights} noite
-                            {nights === 1 ? "" : "s"}) · {r.guestName}
-                          </span>
-                          <b className="shrink-0 ml-2">
-                            {p === null ? "via Airbnb" : fmtMoney(p)}
-                          </b>
-                        </div>
-                      );
-                    })}
+                    {ownerReservations.map((r) => (
+                      <OwnerReservationRow key={r.id} r={r} properties={properties} />
+                    ))}
                     <div
                       className="flex justify-between font-body text-base mt-1"
                       style={{ color: TOKENS.pine }}
