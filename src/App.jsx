@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, Fragment } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, Fragment } from "react";
 import {
   Plus,
   X,
@@ -53,6 +53,7 @@ const DEFAULT_PROPERTIES = DEFAULT_PROPERTY_NAMES.map((name, i) => ({
   breakfastUnit: "pessoa", // "pessoa" | "casal"
   cleaningFee: "",
   petFeePerDay: "",
+  spaFeePerDay: "", // R$ por diária; vazio = não oferece spa
   mapsLink: "",
   airbnbLink: "",
   bookingLink: "",
@@ -185,7 +186,7 @@ function payoutRatesFor(property, guests) {
 // escolhendo os valores conforme o nº de hóspedes (faixas ou adicional).
 // O desconto da reserva (fração, ex: 0.1) é aplicado nas diárias do repasse
 // — o dono absorve o mesmo percentual. Café da manhã soma por fora, sem desconto.
-function suggestedHostPayout(property, checkIn, checkOut, guests, breakfast, discount, pets) {
+function suggestedHostPayout(property, checkIn, checkOut, guests, breakfast, discount, pets, spa) {
   if (!property || !checkIn || !checkOut || checkOut <= checkIn) return null;
   const rates = payoutRatesFor(property, guests);
   if (!rates) return null;
@@ -220,6 +221,10 @@ function suggestedHostPayout(property, checkIn, checkOut, guests, breakfast, dis
   if (petCount > 0 && property.petFeePerDay !== "" && property.petFeePerDay !== undefined && property.petFeePerDay !== null) {
     total += (Number(property.petFeePerDay) || 0) * petCount * nights;
   }
+  // Taxa de spa: por diária quando usado, sem desconto.
+  if (spa && property.spaFeePerDay !== "" && property.spaFeePerDay !== undefined && property.spaFeePerDay !== null) {
+    total += (Number(property.spaFeePerDay) || 0) * nights;
+  }
   return total;
 }
 
@@ -251,6 +256,70 @@ function earningsForReservation(r) {
 
 function genId() {
   return "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+// Decompõe o repasse de uma reserva nos seus componentes (para o relatório do
+// dono). NÃO altera o repasse congelado — apenas o recalcula por partes com as
+// taxas atuais do imóvel. Se a soma das partes não fechar com o repasse real
+// (repasse editado à mão ou taxa do imóvel alterada depois), a diferença sai
+// como "adjust", para o total sempre bater. Retorna null para Airbnb.
+function payoutBreakdown(r, property) {
+  const frozen = payoutForReservation(r);
+  if (frozen === null || !property) return null;
+  const nights = nightsBetween(r.checkIn, r.checkOut);
+  const rates = payoutRatesFor(property, r.guests);
+  let dailies = 0;
+  if (rates) {
+    const wk = rates.weekday;
+    const we = rates.weekend;
+    let cur = r.checkIn;
+    while (cur < r.checkOut) {
+      const useWe = isWeekendNight(cur);
+      const rate = useWe
+        ? (we === "" || we === undefined ? wk : we)
+        : (wk === "" || wk === undefined ? we : wk);
+      dailies += Number(rate) || 0;
+      cur = addDaysISO(cur, 1);
+    }
+    const d = Number(r.discountRate) || 0;
+    if (d > 0 && d <= 1) dailies = dailies * (1 - d);
+  }
+  const cleaning =
+    property.cleaningFee !== "" && property.cleaningFee !== undefined && property.cleaningFee !== null
+      ? Number(property.cleaningFee) || 0
+      : 0;
+  let breakfast = 0;
+  if (r.breakfast && property.breakfastFee !== "" && property.breakfastFee !== undefined && property.breakfastFee !== null) {
+    const fee = Number(property.breakfastFee) || 0;
+    const g = Math.max(Number(r.guests) || 1, 1);
+    const units = property.breakfastUnit === "casal" ? Math.ceil(g / 2) : g;
+    breakfast = fee * units * nights;
+  }
+  let pet = 0;
+  const petCount = Number(r.pets) || 0;
+  if (petCount > 0 && property.petFeePerDay !== "" && property.petFeePerDay !== undefined && property.petFeePerDay !== null) {
+    pet = (Number(property.petFeePerDay) || 0) * petCount * nights;
+  }
+  let spa = 0;
+  if (r.spa && property.spaFeePerDay !== "" && property.spaFeePerDay !== undefined && property.spaFeePerDay !== null) {
+    spa = (Number(property.spaFeePerDay) || 0) * nights;
+  }
+  const computed = dailies + cleaning + breakfast + pet + spa;
+  const adjust = Math.round((frozen - computed) * 100) / 100;
+  return { nights, guests: r.guests, dailies, cleaning, breakfast, pet, spa, frozen, adjust };
+}
+
+// Linhas de detalhe do repasse (label + valor), só com o que existe naquela
+// reserva. Usado tanto no texto (WhatsApp) quanto na versão visual/impressa.
+function payoutDetailLines(bd) {
+  const plural = (n) => (n === 1 ? "" : "s");
+  const lines = [{ label: `Diárias (${bd.nights} noite${plural(bd.nights)})`, value: bd.dailies }];
+  if (bd.cleaning > 0) lines.push({ label: "Limpeza", value: bd.cleaning });
+  if (bd.breakfast > 0) lines.push({ label: "Café da manhã", value: bd.breakfast });
+  if (bd.pet > 0) lines.push({ label: `Pet (${bd.nights} diária${plural(bd.nights)})`, value: bd.pet });
+  if (bd.spa > 0) lines.push({ label: `Spa (${bd.nights} diária${plural(bd.nights)})`, value: bd.spa });
+  if (Math.abs(bd.adjust) >= 0.01) lines.push({ label: "Ajuste", value: bd.adjust });
+  return lines;
 }
 
 // Sempre usa os componentes de data LOCAIS (nunca toISOString/UTC), para não
@@ -325,6 +394,7 @@ function migratePropertiesList(rawProps) {
         breakfastUnit: "pessoa",
         cleaningFee: "",
         petFeePerDay: "",
+        spaFeePerDay: "",
         mapsLink: "",
         airbnbLink: "",
         bookingLink: "",
@@ -344,6 +414,7 @@ function migratePropertiesList(rawProps) {
       breakfastUnit: "pessoa",
       cleaningFee: "",
       petFeePerDay: "",
+      spaFeePerDay: "",
       mapsLink: "",
       airbnbLink: "",
       bookingLink: "",
@@ -393,6 +464,7 @@ function propertyToRow(p) {
     breakfast_unit: p.breakfastUnit || "pessoa",
     cleaning_fee: numOrNull(p.cleaningFee),
     pet_fee_per_day: numOrNull(p.petFeePerDay),
+    spa_fee_per_day: numOrNull(p.spaFeePerDay),
     maps_link: p.mapsLink || "",
     airbnb_link: p.airbnbLink || "",
     booking_link: p.bookingLink || "",
@@ -415,6 +487,7 @@ function rowToProperty(row) {
     breakfastUnit: row.breakfast_unit || "pessoa",
     cleaningFee: nullToEmpty(row.cleaning_fee),
     petFeePerDay: nullToEmpty(row.pet_fee_per_day),
+    spaFeePerDay: nullToEmpty(row.spa_fee_per_day),
     mapsLink: row.maps_link || "",
     airbnbLink: row.airbnb_link || "",
     bookingLink: row.booking_link || "",
@@ -443,6 +516,7 @@ function reservationToRow(r, properties) {
     guest_count: numOrNull(r.guests),
     pet_count: numOrNull(r.pets),
     breakfast: !!r.breakfast,
+    spa: !!r.spa,
     payment_status: r.paymentStatus || null,
     booking_commission_amount: numOrNull(r.bookingCommissionAmount),
   };
@@ -466,6 +540,7 @@ function rowToReservation(row, idToName) {
     guests: nullToEmpty(row.guest_count),
     pets: nullToEmpty(row.pet_count),
     breakfast: !!row.breakfast,
+    spa: !!row.spa,
     paymentStatus: row.payment_status || "pendente",
     bookingCommissionAmount: nullToEmpty(row.booking_commission_amount),
   };
@@ -694,6 +769,7 @@ export default function App() {
       breakfastUnit: "pessoa",
       cleaningFee: "",
       petFeePerDay: "",
+      spaFeePerDay: "",
       mapsLink: "",
       airbnbLink: "",
       bookingLink: "",
@@ -906,7 +982,7 @@ export default function App() {
 
   return (
     <div style={{ background: TOKENS.sand, minHeight: "100vh" }} className="pb-28">
-      <div className="max-w-xl mx-auto lg:max-w-5xl">
+      <div className={view === "calendario" ? "w-full" : "max-w-xl mx-auto lg:max-w-5xl"}>
       <FontLoader />
       <Toast toast={toast} />
       <Header view={view} onMenuClick={() => setDrawerOpen(true)} />
@@ -1043,7 +1119,7 @@ export default function App() {
       {/* Floating action buttons */}
       {view !== "comissao" && (
         <div className="fixed bottom-6 inset-x-0 z-30 pointer-events-none">
-          <div className="max-w-xl mx-auto flex justify-end pr-5 lg:max-w-5xl">
+          <div className={(view === "calendario" ? "w-full" : "max-w-xl mx-auto lg:max-w-5xl") + " flex justify-end pr-5"}>
             <div className="flex flex-col gap-3 pointer-events-auto">
               <button
                 onClick={() => {
@@ -1472,6 +1548,39 @@ function CommissionView({ reservations }) {
   );
 }
 
+function OwnerReservationRow({ r, properties }) {
+  const nights = nightsBetween(r.checkIn, r.checkOut);
+  const p = payoutForReservation(r);
+  const g = Number(r.guests) || 0;
+  const guestsPart = g > 0 ? ` · ${g} hóspede${g === 1 ? "" : "s"}` : "";
+  const prop = properties.find((x) => x.name === r.propertyName) || null;
+  const bd = p === null ? null : payoutBreakdown(r, prop);
+  return (
+    <div
+      className="font-body text-sm pb-1.5"
+      style={{ color: TOKENS.ink, borderBottom: `1px solid ${TOKENS.sand}` }}
+    >
+      <div className="flex justify-between">
+        <span>
+          {fmtDateBR(r.checkIn)} a {fmtDateBR(r.checkOut)} ({nights} noite
+          {nights === 1 ? "" : "s"}){guestsPart} · {r.guestName}
+        </span>
+        <b className="shrink-0 ml-2">{p === null ? "via Airbnb" : fmtMoney(p)}</b>
+      </div>
+      {bd && (
+        <div className="mt-0.5 pl-3" style={{ color: TOKENS.moss }}>
+          {payoutDetailLines(bd).map((l, i) => (
+            <div key={i} className="flex justify-between text-[13px]">
+              <span>{l.label}</span>
+              <span>{fmtMoney(l.value)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReportsView({ reservations, properties }) {
   const [monthDate, setMonthDate] = useState(new Date());
   const [reportProperty, setReportProperty] = useState("");
@@ -1558,32 +1667,37 @@ function ReportsView({ reservations, properties }) {
     if (!isOwnerReport && ownerProp && ownerProp.hostName)
       lines.push(`Anfitrião: ${ownerProp.hostName}`);
     lines.push("");
+    // Linhas de uma reserva: cabeçalho + detalhamento do repasse.
+    const resLines = (r) => {
+      const nights = nightsBetween(r.checkIn, r.checkOut);
+      const p = payoutForReservation(r);
+      const g = Number(r.guests) || 0;
+      const guestsPart = g > 0 ? ` · ${g} hóspede${g === 1 ? "" : "s"}` : "";
+      const header = `• ${fmtDateBR(r.checkIn)} a ${fmtDateBR(r.checkOut)} (${nights} noite${
+        nights === 1 ? "" : "s"
+      })${guestsPart} · ${r.guestName}`;
+      if (p === null) return [header + " — pago via Airbnb"];
+      const prop = properties.find((x) => x.name === r.propertyName) || null;
+      const bd = payoutBreakdown(r, prop);
+      const out = [header];
+      if (bd) {
+        payoutDetailLines(bd).forEach((l) => out.push(`    ${l.label}: ${fmtMoney(l.value)}`));
+        out.push(`    Repasse: ${fmtMoney(bd.frozen)}`);
+      } else {
+        out.push(`    Repasse: ${fmtMoney(p)}`);
+      }
+      return out;
+    };
     if (isOwnerReport) {
       groupedByProp.forEach((g) => {
         const subtotal = g.items.reduce((s, r) => s + (payoutForReservation(r) ?? 0), 0);
         lines.push(`${g.name}:`);
-        g.items.forEach((r) => {
-          const nights = nightsBetween(r.checkIn, r.checkOut);
-          const p = payoutForReservation(r);
-          lines.push(
-            `• ${fmtDateBR(r.checkIn)} a ${fmtDateBR(r.checkOut)} (${nights} noite${
-              nights === 1 ? "" : "s"
-            }) — ${r.guestName} — ${p === null ? "pago via Airbnb" : "repasse " + fmtMoney(p)}`
-          );
-        });
+        g.items.forEach((r) => resLines(r).forEach((l) => lines.push(l)));
         lines.push(`Subtotal ${g.name}: ${fmtMoney(subtotal)}`);
         lines.push("");
       });
     } else {
-      ownerReservations.forEach((r) => {
-        const nights = nightsBetween(r.checkIn, r.checkOut);
-        const p = payoutForReservation(r);
-        lines.push(
-          `• ${fmtDateBR(r.checkIn)} a ${fmtDateBR(r.checkOut)} (${nights} noite${
-            nights === 1 ? "" : "s"
-          }) — ${r.guestName} — ${p === null ? "pago via Airbnb" : "repasse " + fmtMoney(p)}`
-        );
-      });
+      ownerReservations.forEach((r) => resLines(r).forEach((l) => lines.push(l)));
       lines.push("");
     }
     lines.push(`Total a repassar: ${fmtMoney(ownerPayoutTotal)}`);
@@ -1758,28 +1872,9 @@ function ReportsView({ reservations, properties }) {
                             {g.name}
                           </p>
                           <div className="flex flex-col gap-2">
-                            {g.items.map((r) => {
-                              const nights = nightsBetween(r.checkIn, r.checkOut);
-                              const p = payoutForReservation(r);
-                              return (
-                                <div
-                                  key={r.id}
-                                  className="flex justify-between font-body text-sm pb-1"
-                                  style={{
-                                    color: TOKENS.ink,
-                                    borderBottom: `1px solid ${TOKENS.sand}`,
-                                  }}
-                                >
-                                  <span>
-                                    {fmtDateBR(r.checkIn)} a {fmtDateBR(r.checkOut)} ({nights}{" "}
-                                    noite{nights === 1 ? "" : "s"}) · {r.guestName}
-                                  </span>
-                                  <b className="shrink-0 ml-2">
-                                    {p === null ? "via Airbnb" : fmtMoney(p)}
-                                  </b>
-                                </div>
-                              );
-                            })}
+                            {g.items.map((r) => (
+                              <OwnerReservationRow key={r.id} r={r} properties={properties} />
+                            ))}
                             <div
                               className="flex justify-between font-body text-sm"
                               style={{ color: TOKENS.moss }}
@@ -1808,25 +1903,9 @@ function ReportsView({ reservations, properties }) {
                   </div>
                 ) : (
                   <div className="mt-3 flex flex-col gap-2">
-                    {ownerReservations.map((r) => {
-                      const nights = nightsBetween(r.checkIn, r.checkOut);
-                      const p = payoutForReservation(r);
-                      return (
-                        <div
-                          key={r.id}
-                          className="flex justify-between font-body text-sm pb-1"
-                          style={{ color: TOKENS.ink, borderBottom: `1px solid ${TOKENS.sand}` }}
-                        >
-                          <span>
-                            {fmtDateBR(r.checkIn)} a {fmtDateBR(r.checkOut)} ({nights} noite
-                            {nights === 1 ? "" : "s"}) · {r.guestName}
-                          </span>
-                          <b className="shrink-0 ml-2">
-                            {p === null ? "via Airbnb" : fmtMoney(p)}
-                          </b>
-                        </div>
-                      );
-                    })}
+                    {ownerReservations.map((r) => (
+                      <OwnerReservationRow key={r.id} r={r} properties={properties} />
+                    ))}
                     <div
                       className="flex justify-between font-body text-base mt-1"
                       style={{ color: TOKENS.pine }}
@@ -1991,6 +2070,9 @@ function ReservationList({ reservations, onEdit, onDelete }) {
                     {" "}· 🐾 {r.pets} pet{Number(r.pets) === 1 ? "" : "s"}
                   </span>
                 )}
+                {r.spa && (
+                  <span className="text-xs font-normal" style={{ color: TOKENS.moss }}> · 🛁 com spa</span>
+                )}
               </p>
               <p className="font-display text-lg mt-1.5" style={{ color: TOKENS.ink }}>
                 {r.channel === "airbnb" ? (
@@ -2104,7 +2186,8 @@ function fmtDayMonth(date) {
   return `${String(date.getDate()).padStart(2, "0")} ${MONTH_ABBR[date.getMonth()]}`;
 }
 
-const CELL_WIDTH = 64;
+const CELL_WIDTH = 60;
+const NAME_COL_WIDTH = 104;
 const ROW_HEIGHT = 56;
 // Corte diagonal da barra de reserva: metade da largura do dia, para que o
 // check-out de uma reserva e o check-in da próxima no mesmo dia caibam cada
@@ -2120,18 +2203,30 @@ function CalendarView({
   onSelectReservation,
   onQuickAdd,
 }) {
-  const WINDOW_DAYS = 28;
+  // Janela ampla (9 semanas) para que, mesmo em telas largas, sobre bastante
+  // espaço de rolagem entre os dois gatilhos de reancoramento. Janelas curtas
+  // faziam a "zona segura" encolher a ponto de a compensação de scroll cair
+  // sempre no gatilho oposto, gerando oscilação (a barra pulava de lado a lado).
+  const WINDOW_DAYS = 63;
   const SHIFT_DAYS = 7;
   const EDGE_THRESHOLD = CELL_WIDTH * 5;
+  const INITIAL_OFFSET = 21; // dias de margem à esquerda do dia de referência
 
   const [anchor, setAnchor] = useState(() => {
     const d = new Date(calendarMonth);
-    d.setDate(d.getDate() - 10);
+    d.setDate(d.getDate() - INITIAL_OFFSET);
     return d;
   });
   const [visibleStart, setVisibleStart] = useState(calendarMonth);
   const scrollRef = useRef(null);
   const didInitialScroll = useRef(false);
+  // Quanto ajustar o scrollLeft DEPOIS que o React re-renderizar a janela
+  // com o novo anchor. É aplicado no useLayoutEffect abaixo (sincronamente,
+  // antes do paint), evitando o salto visual de mexer no DOM antigo.
+  const pendingScrollAdjust = useRef(0);
+  // Último dia de início visível já refletido no estado, para evitar
+  // re-render a cada pixel de scroll.
+  const lastVisibleDayMs = useRef(null);
 
   const days = useMemo(() => {
     const arr = [];
@@ -2157,30 +2252,60 @@ function CalendarView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Depois que o anchor muda e o React re-renderiza a nova janela de dias,
+  // aplicamos a compensação de scroll aqui — sincronamente, antes do paint.
+  // Isso mantém o mesmo dia sob os olhos do usuário, sem o salto de 7 dias.
+  useLayoutEffect(() => {
+    if (pendingScrollAdjust.current === 0) return;
+    const el = scrollRef.current;
+    if (el) el.scrollLeft += pendingScrollAdjust.current;
+    pendingScrollAdjust.current = 0;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anchor]);
+
   function handleScroll() {
     const el = scrollRef.current;
     if (!el) return;
+    // Enquanto uma compensação de anchor está pendente, ignoramos o scroll
+    // para não disparar shifts em cascata.
+    if (pendingScrollAdjust.current !== 0) return;
     const scrollLeft = el.scrollLeft;
 
+    // Só atualiza o rótulo/estado quando o dia de início realmente muda,
+    // e não a cada pixel — evita re-render contínuo durante o arrasto.
     const firstVisible = new Date(anchor);
     firstVisible.setDate(firstVisible.getDate() + Math.round(scrollLeft / CELL_WIDTH));
-    setVisibleStart(firstVisible);
+    const firstVisibleMs = firstVisible.getTime();
+    if (firstVisibleMs !== lastVisibleDayMs.current) {
+      lastVisibleDayMs.current = firstVisibleMs;
+      setVisibleStart(firstVisible);
+    }
 
     const maxScroll = el.scrollWidth - el.clientWidth;
     if (scrollLeft < EDGE_THRESHOLD) {
+      // Só reancora se, após a compensação, o scroll couber dentro da zona
+      // segura (longe do gatilho oposto). Em telas onde a janela seria estreita
+      // demais isso evita o loop de reancoramento (a barra pulando de lado a lado).
+      const projected = scrollLeft + SHIFT_DAYS * CELL_WIDTH;
+      if (projected > maxScroll - EDGE_THRESHOLD) return;
+      // Janela vai crescer 7 dias para a esquerda -> conteúdo desloca +448px.
+      // Marcamos a compensação e deixamos o useLayoutEffect aplicá-la após o
+      // re-render, evitando o salto visual.
+      pendingScrollAdjust.current = SHIFT_DAYS * CELL_WIDTH;
       setAnchor((prev) => {
         const d = new Date(prev);
         d.setDate(d.getDate() - SHIFT_DAYS);
         return d;
       });
-      el.scrollLeft = scrollLeft + SHIFT_DAYS * CELL_WIDTH;
     } else if (maxScroll - scrollLeft < EDGE_THRESHOLD) {
+      const projected = scrollLeft - SHIFT_DAYS * CELL_WIDTH;
+      if (projected < EDGE_THRESHOLD) return;
+      pendingScrollAdjust.current = -SHIFT_DAYS * CELL_WIDTH;
       setAnchor((prev) => {
         const d = new Date(prev);
         d.setDate(d.getDate() + SHIFT_DAYS);
         return d;
       });
-      el.scrollLeft = scrollLeft - SHIFT_DAYS * CELL_WIDTH;
     }
   }
 
@@ -2194,12 +2319,13 @@ function CalendarView({
     const el = scrollRef.current;
     const todayDate = new Date();
     const newAnchor = new Date(todayDate);
-    newAnchor.setDate(newAnchor.getDate() - 10);
+    newAnchor.setDate(newAnchor.getDate() - INITIAL_OFFSET);
     setAnchor(newAnchor);
     setCalendarMonth(todayDate);
     setVisibleStart(todayDate);
+    lastVisibleDayMs.current = todayDate.getTime();
     requestAnimationFrame(() => {
-      if (el) el.scrollLeft = 10 * CELL_WIDTH;
+      if (el) el.scrollLeft = INITIAL_OFFSET * CELL_WIDTH;
     });
   }
 
@@ -2216,7 +2342,7 @@ function CalendarView({
   )} ${rangeEnd.getFullYear()}`;
 
   return (
-    <div className="mx-5 mt-2">
+    <div className="mx-0 sm:mx-4 mt-2">
       <div
         className="flex items-center justify-between mb-3 rounded-2xl px-2 py-2"
         style={{ background: TOKENS.cream, border: `1px solid ${TOKENS.sand}` }}
@@ -2269,8 +2395,8 @@ function CalendarView({
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: `120px repeat(${days.length}, ${CELL_WIDTH}px)`,
-              minWidth: 120 + days.length * CELL_WIDTH,
+              gridTemplateColumns: `${NAME_COL_WIDTH}px repeat(${days.length}, ${CELL_WIDTH}px)`,
+              minWidth: NAME_COL_WIDTH + days.length * CELL_WIDTH,
             }}
           >
             {/* corner cell */}
@@ -2569,8 +2695,12 @@ function ReservationForm({ properties, initial, onAddProperty, onCancel, onSave 
   const [guests, setGuests] = useState(initial?.guests ?? "");
   const [pets, setPets] = useState(initial?.pets ?? "");
   const [breakfast, setBreakfast] = useState(initial?.breakfast || false);
+  const [spa, setSpa] = useState(initial?.spa || false);
   const [checkOut, setCheckOut] = useState(initial?.checkOut || "");
   const [value, setValue] = useState(initial?.value ?? "");
+  const [valueTouched, setValueTouched] = useState(
+    Boolean(initial && initial.value !== "" && initial.value !== undefined && initial.value !== null)
+  );
   const [netReceived, setNetReceived] = useState(initial?.netReceived ?? "");
   const [bookingCommissionAmount, setBookingCommissionAmount] = useState(
     initial?.bookingCommissionAmount ??
@@ -2636,13 +2766,28 @@ function ReservationForm({ properties, initial, onAddProperty, onCancel, onSave 
     guests,
     breakfast,
     isAirbnb || isBooking ? 0 : (Number(discountRate) || 0) / 100,
-    pets
+    pets,
+    spa
   );
   useEffect(() => {
     if (!hostPayoutTouched && !isAirbnb) {
       setHostPayout(suggestedPayout === null ? "" : suggestedPayout);
     }
   }, [suggestedPayout, hostPayoutTouched, isAirbnb]);
+
+  // Valor final sugerido ao hóspede: repasse ao dono + 15% de markup.
+  // Esse markup mantém sua comissão (~13% do total) sem mexer no repasse.
+  // É só uma sugestão: você pode sobrescrever quando a demanda permite cobrar mais.
+  const DIRECT_MARKUP = 0.15;
+  const suggestedValue =
+    !isAirbnb && !isBooking && hostPayout !== "" && Number(hostPayout) > 0
+      ? Math.round(Number(hostPayout) * (1 + DIRECT_MARKUP) * 100) / 100
+      : null;
+  useEffect(() => {
+    if (!valueTouched && !isAirbnb && !isBooking && suggestedValue !== null) {
+      setValue(suggestedValue);
+    }
+  }, [suggestedValue, valueTouched, isAirbnb, isBooking]);
 
   function handleSubmit() {
     const finalProperty = newPropertyMode ? newPropertyName.trim() : propertyName;
@@ -2667,6 +2812,7 @@ function ReservationForm({ properties, initial, onAddProperty, onCancel, onSave 
       guests: guests === "" ? "" : Math.max(Math.round(Number(guests)) || 0, 1),
       pets: pets === "" ? "" : Math.max(Math.round(Number(pets)) || 0, 0),
       breakfast,
+      spa,
       value: Number(value) || 0,
       netReceived: isAirbnb ? Number(netReceived) || 0 : isBooking ? bookingNetReceived : 0,
       bookingCommissionAmount: isBooking ? Number(bookingCommissionAmount) || 0 : 0,
@@ -2787,6 +2933,23 @@ function ReservationForm({ properties, initial, onAddProperty, onCancel, onSave 
             />
             Com café da manhã ({fmtMoney(selectedPropObj.breakfastFee)}/
             {selectedPropObj.breakfastUnit === "casal" ? "casal" : "pessoa"} por diária)
+          </label>
+        )}
+
+      {selectedPropObj &&
+        selectedPropObj.spaFeePerDay !== "" &&
+        selectedPropObj.spaFeePerDay !== undefined &&
+        selectedPropObj.spaFeePerDay !== null && (
+          <label
+            className="font-body text-sm flex items-center gap-2 mb-3 cursor-pointer"
+            style={{ color: TOKENS.ink }}
+          >
+            <input
+              type="checkbox"
+              checked={spa}
+              onChange={(e) => setSpa(e.target.checked)}
+            />
+            Com spa ({fmtMoney(selectedPropObj.spaFeePerDay)} por diária)
           </label>
         )}
 
@@ -2953,9 +3116,25 @@ function ReservationForm({ properties, initial, onAddProperty, onCancel, onSave 
               inputMode="decimal"
               style={inputStyle}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(e) => {
+                setValue(e.target.value);
+                setValueTouched(true);
+              }}
             />
           </Field>
+          {suggestedValue !== null && Number(value) !== suggestedValue && (
+            <button
+              type="button"
+              onClick={() => {
+                setValue(suggestedValue);
+                setValueTouched(true);
+              }}
+              className="font-body text-xs px-3 py-1.5 rounded-full mb-3 -mt-1"
+              style={{ background: TOKENS.sand, color: TOKENS.pine }}
+            >
+              Sugerido: {fmtMoney(suggestedValue)} — usar
+            </button>
+          )}
 
           <Field label="Repasse ao anfitrião (R$)">
             <input
@@ -3191,6 +3370,11 @@ function PropertiesManager({ properties, deleteError, onEdit, onDeleteRequest })
               Não aceita pets
             </p>
           )}
+          {p.spaFeePerDay !== "" && p.spaFeePerDay !== undefined && p.spaFeePerDay !== null && (
+            <p className="font-body text-[13.5px] mt-0.5" style={{ color: TOKENS.moss }}>
+              Taxa de spa: <b style={{ color: TOKENS.ink }}>{fmtMoney(p.spaFeePerDay)}</b> / diária
+            </p>
+          )}
           <div
             className="flex flex-wrap gap-4 mt-3 pt-3"
             style={{ borderTop: `1px solid ${TOKENS.sand}` }}
@@ -3268,6 +3452,7 @@ function PropertyForm({ initial, properties, onCancel, onSave }) {
   const [breakfastUnit, setBreakfastUnit] = useState(initial?.breakfastUnit || "pessoa");
   const [cleaningFee, setCleaningFee] = useState(initial?.cleaningFee ?? "");
   const [petFeePerDay, setPetFeePerDay] = useState(initial?.petFeePerDay ?? "");
+  const [spaFeePerDay, setSpaFeePerDay] = useState(initial?.spaFeePerDay ?? "");
   const [mapsLink, setMapsLink] = useState(initial?.mapsLink || "");
   const [airbnbLink, setAirbnbLink] = useState(initial?.airbnbLink || "");
   const [bookingLink, setBookingLink] = useState(initial?.bookingLink || "");
@@ -3339,6 +3524,7 @@ function PropertyForm({ initial, properties, onCancel, onSave }) {
         breakfastUnit,
         cleaningFee: cleaningFee === "" ? "" : Number(cleaningFee) || 0,
         petFeePerDay: petFeePerDay === "" ? "" : Number(petFeePerDay) || 0,
+        spaFeePerDay: spaFeePerDay === "" ? "" : Number(spaFeePerDay) || 0,
         mapsLink: normalizeUrl(mapsLink),
         airbnbLink: normalizeUrl(airbnbLink),
         bookingLink: normalizeUrl(bookingLink),
@@ -3573,6 +3759,19 @@ function PropertyForm({ initial, properties, onCancel, onSave }) {
       </Field>
       <p className="font-body text-sm -mt-2 mb-3" style={{ color: TOKENS.moss }}>
         Deixe vazio se o imóvel não aceita pets.
+      </p>
+
+      <Field label="Taxa de spa · por diária (R$)">
+        <input
+          type="number"
+          inputMode="decimal"
+          style={inputStyle}
+          value={spaFeePerDay}
+          onChange={(e) => setSpaFeePerDay(e.target.value)}
+        />
+      </Field>
+      <p className="font-body text-sm -mt-2 mb-3" style={{ color: TOKENS.moss }}>
+        Deixe vazio se o imóvel não oferece spa.
       </p>
 
       <Field label="Link do Google Maps">
