@@ -22,6 +22,7 @@ import {
   Camera,
   Lock,
   LogOut,
+  Filter,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -2227,6 +2228,10 @@ function CalendarView({
     return d;
   });
   const [visibleStart, setVisibleStart] = useState(calendarMonth);
+  const [showFilterSheet, setShowFilterSheet] = useState(false);
+  // "padrao" agrupa por dono; as outras ordenam pela quantidade de reservas
+  // (histórico completo) de cada imóvel.
+  const [calendarSort, setCalendarSort] = useState("padrao");
   const scrollRef = useRef(null);
   const didInitialScroll = useRef(false);
   // Quanto ajustar o scrollLeft DEPOIS que o React re-renderizar a janela
@@ -2343,20 +2348,31 @@ function CalendarView({
 
   const isOwnerFilter = selectedProperty.startsWith("owner:");
   const ownerFilterName = isOwnerFilter ? selectedProperty.slice(6) : null;
+  const isFilterActive = selectedProperty !== "Todos" || calendarSort !== "padrao";
 
-  const rowsProperties =
-    selectedProperty === "Todos"
-      ? // Sem filtro: mostra todos, mas agrupados por dono (imóveis do mesmo
-        // dono ficam em linhas adjacentes, em vez de espalhados alfabeticamente).
-        [...properties].sort((a, b) => {
-          const ha = (a.hostName || "").trim();
-          const hb = (b.hostName || "").trim();
-          if (ha !== hb) return ha.localeCompare(hb);
-          return a.name.localeCompare(b.name);
-        })
-      : isOwnerFilter
-      ? properties.filter((p) => (p.hostName || "").trim() === ownerFilterName)
-      : properties.filter((p) => p.name === selectedProperty);
+  // Quantas reservas esse imóvel já teve (histórico completo) — usado
+  // para ordenar por "mais alugados" / "menos alugados".
+  const rentalCount = (p) => reservations.filter((r) => r.propertyName === p.name).length;
+
+  const filteredProperties = isOwnerFilter
+    ? properties.filter((p) => (p.hostName || "").trim() === ownerFilterName)
+    : selectedProperty === "Todos"
+    ? properties
+    : properties.filter((p) => p.name === selectedProperty);
+
+  const rowsProperties = [...filteredProperties].sort((a, b) => {
+    if (calendarSort === "mais_alugados") {
+      return rentalCount(b) - rentalCount(a) || a.name.localeCompare(b.name);
+    }
+    if (calendarSort === "menos_alugados") {
+      return rentalCount(a) - rentalCount(b) || a.name.localeCompare(b.name);
+    }
+    // Padrão: agrupa por dono, depois por nome.
+    const ha = (a.hostName || "").trim();
+    const hb = (b.hostName || "").trim();
+    if (ha !== hb) return ha.localeCompare(hb);
+    return a.name.localeCompare(b.name);
+  });
 
   const today = todayISO();
   const rangeEnd = new Date(visibleStart);
@@ -2397,35 +2413,6 @@ function CalendarView({
         </button>
       </div>
 
-      <div
-        className="mb-3 rounded-2xl px-3 py-2"
-        style={{ background: TOKENS.cream, border: `1px solid ${TOKENS.sand}` }}
-      >
-        <select
-          value={selectedProperty}
-          onChange={(e) => setSelectedProperty(e.target.value)}
-          style={{ ...inputStyle, border: "none", padding: "2px 0" }}
-        >
-          <option value="Todos">Todos os imóveis</option>
-          {owners.length > 0 && (
-            <optgroup label="Por dono (agrupa os imóveis)">
-              {owners.map((o) => (
-                <option key={`owner:${o}`} value={`owner:${o}`}>
-                  👤 {o}
-                </option>
-              ))}
-            </optgroup>
-          )}
-          <optgroup label="Por imóvel">
-            {properties.map((p) => (
-              <option key={p.id} value={p.name}>
-                {p.name}
-              </option>
-            ))}
-          </optgroup>
-        </select>
-      </div>
-
       {rowsProperties.length === 0 ? (
         <div className="rounded-2xl p-6 text-center" style={{ background: TOKENS.cream }}>
           <p className="font-body text-sm" style={{ color: TOKENS.ink }}>
@@ -2452,7 +2439,7 @@ function CalendarView({
               minWidth: NAME_COL_WIDTH + days.length * CELL_WIDTH,
             }}
           >
-            {/* corner cell */}
+            {/* corner cell: botão de filtro/ordenação */}
             <div
               style={{
                 position: "sticky",
@@ -2462,8 +2449,19 @@ function CalendarView({
                 background: TOKENS.cream,
                 borderBottom: `1px solid ${TOKENS.sand}`,
               }}
-              className="p-2"
-            />
+              className="p-2 flex items-center justify-center"
+            >
+              <button
+                onClick={() => setShowFilterSheet(true)}
+                aria-label="Filtrar e ordenar imóveis"
+                className="flex items-center justify-center w-8 h-8 rounded-full"
+                style={{
+                  background: isFilterActive ? TOKENS.clay : TOKENS.sand,
+                }}
+              >
+                <Filter size={16} color={isFilterActive ? "white" : TOKENS.pine} />
+              </button>
+            </div>
             {days.map((d, i) => {
               const isToday = daysISO[i] === today;
               const isWeekend = d.getDay() === 0 || d.getDay() === 6;
@@ -2661,6 +2659,80 @@ function CalendarView({
             })}
           </div>
         </div>
+      )}
+
+      {showFilterSheet && (
+        <Sheet title="Filtrar e ordenar" onClose={() => setShowFilterSheet(false)}>
+          <div className="flex flex-col gap-4">
+            <div>
+              <p className="font-body text-xs font-semibold mb-2" style={{ color: TOKENS.moss }}>
+                MOSTRAR
+              </p>
+              <select
+                value={selectedProperty}
+                onChange={(e) => setSelectedProperty(e.target.value)}
+                style={inputStyle}
+              >
+                <option value="Todos">Todos os imóveis</option>
+                {owners.length > 0 && (
+                  <optgroup label="Por dono (agrupa os imóveis)">
+                    {owners.map((o) => (
+                      <option key={`owner:${o}`} value={`owner:${o}`}>
+                        👤 {o}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                <optgroup label="Por imóvel">
+                  {properties.map((p) => (
+                    <option key={p.id} value={p.name}>
+                      {p.name}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
+
+            <div>
+              <p className="font-body text-xs font-semibold mb-2" style={{ color: TOKENS.moss }}>
+                ORDENAR
+              </p>
+              <div className="flex flex-col gap-2">
+                {[
+                  ["padrao", "Padrão (agrupado por dono)"],
+                  ["mais_alugados", "Mais alugados primeiro"],
+                  ["menos_alugados", "Menos alugados primeiro"],
+                ].map(([val, label]) => (
+                  <button
+                    key={val}
+                    onClick={() => setCalendarSort(val)}
+                    className="font-body text-left text-sm rounded-xl px-4 py-3"
+                    style={{
+                      background: calendarSort === val ? TOKENS.pine : TOKENS.sand,
+                      color: calendarSort === val ? "white" : TOKENS.ink,
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="font-body text-xs mt-2" style={{ color: TOKENS.moss }}>
+                "Mais/menos alugados" considera o total de reservas já feitas em cada imóvel, desde o início.
+              </p>
+            </div>
+
+            <button
+              onClick={() => {
+                setSelectedProperty("Todos");
+                setCalendarSort("padrao");
+              }}
+              className="font-body text-sm py-2.5 rounded-xl"
+              style={{ background: TOKENS.sand, color: TOKENS.ink }}
+            >
+              Limpar filtro e ordenação
+            </button>
+          </div>
+        </Sheet>
       )}
     </div>
   );
