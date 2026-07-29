@@ -2460,9 +2460,7 @@ function CalendarView({
               );
               return (
                 <Fragment key={p.id}>
-                 
-                  </div>
-<div
+                  <div
                     style={{
                       position: "sticky",
                       left: 0,
@@ -2488,7 +2486,8 @@ function CalendarView({
                       {p.name}
                     </p>
                   </div>
-                <div
+
+                  <div
                     style={{
                       gridColumn: `2 / span ${days.length}`,
                       position: "relative",
@@ -2555,7 +2554,7 @@ function CalendarView({
                       const clip = `polygon(${hasLeftCut ? CHAMFER : 0}px 0, 100% 0, calc(100% - ${
                         hasRightCut ? CHAMFER : 0
                       }px) 100%, 0 100%)`;
-                    // Zona segura para o texto: a largura da caixa menos o padding
+                      // Zona segura para o texto: a largura da caixa menos o padding
                       // menos os cantos diagonais (CHAMFER) de cada lado que existir.
                       // Sem isso, o corte diagonal pode fatiar o nome no meio mesmo
                       // depois do truncate já ter "encolhido" o texto.
@@ -2589,17 +2588,17 @@ function CalendarView({
                             cursor: "pointer",
                           }}
                         >
-                        <span
-  className="truncate"
-  style={{
-    color: "white",
-    letterSpacing: "0.01em",
-    minWidth: 0,
-    maxWidth: safeTextWidth,
-  }}
->
-  {r.guestName.split(" ")[0]}
-</span>
+                          <span
+                            className="truncate"
+                            style={{
+                              color: "white",
+                              letterSpacing: "0.01em",
+                              minWidth: 0,
+                              maxWidth: safeTextWidth,
+                            }}
+                          >
+                            {r.guestName.split(" ")[0]}
+                          </span>
                         </button>
                       );
                     })}
