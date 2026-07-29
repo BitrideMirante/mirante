@@ -23,6 +23,7 @@ import {
   Lock,
   LogOut,
   Filter,
+  MessageCircle,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -1717,18 +1718,25 @@ function ReportsView({ reservations, properties }) {
 
   function prepReportText() {
     const lines = [];
-    lines.push(`Preparação de hospedagem — ${isOwnerReport ? ownerName : reportProperty}`);
-    lines.push(`Gerado em ${fmtDateBR(todayForPrep)}`);
+    lines.push(`*Preparação de hospedagem — ${isOwnerReport ? ownerName : reportProperty}*`);
+    lines.push(`_Gerado em ${fmtDateBR(todayForPrep)}_`);
     lines.push("");
-    const resLine = (r) => {
+    // Cada reserva vira um "cartão" de 3-4 linhas, separado por linha em
+    // branco das outras — isso é o que faz a diferença de legibilidade no
+    // WhatsApp (blocos de texto corrido ficam ilegíveis lá).
+    const resBlock = (r) => {
       const nights = nightsBetween(r.checkIn, r.checkOut);
       const g = Number(r.guests) || 0;
       const guestsPart = g > 0 ? ` · ${g} hóspede${g === 1 ? "" : "s"}` : "";
-      const breakfastPart = r.breakfast ? " · Com café da manhã" : " · Sem café da manhã";
-      const contactPart = r.guestContact ? ` · Contato: ${r.guestContact}` : "";
-      return `• ${fmtDateBR(r.checkIn)} a ${fmtDateBR(r.checkOut)} (${nights} noite${
-        nights === 1 ? "" : "s"
-      })${guestsPart} · ${r.guestName}${breakfastPart}${contactPart}`;
+      const block = [
+        `🗓️ ${fmtDateBR(r.checkIn)} a ${fmtDateBR(r.checkOut)} (${nights} noite${
+          nights === 1 ? "" : "s"
+        })`,
+        `👤 *${r.guestName}*${guestsPart}`,
+        r.breakfast ? "☕ Com café da manhã" : "🚫 Sem café da manhã",
+      ];
+      if (r.guestContact) block.push(`📞 ${r.guestContact}`);
+      return block.join("\n");
     };
     if (upcomingForPrep.length === 0) {
       lines.push("Nenhuma estadia futura.");
@@ -1736,14 +1744,26 @@ function ReportsView({ reservations, properties }) {
     }
     if (isOwnerReport) {
       groupedByPropPrep.forEach((g) => {
-        lines.push(`${g.name}:`);
-        g.items.forEach((r) => lines.push(resLine(r)));
+        lines.push(`🏠 *${g.name}*`);
         lines.push("");
+        g.items.forEach((r) => {
+          lines.push(resBlock(r));
+          lines.push("");
+        });
       });
     } else {
-      upcomingForPrep.forEach((r) => lines.push(resLine(r)));
+      upcomingForPrep.forEach((r) => {
+        lines.push(resBlock(r));
+        lines.push("");
+      });
     }
-    return lines.join("\n");
+    return lines.join("\n").trim();
+  }
+
+  // Abre o WhatsApp (app ou web) com o texto já pronto no campo de mensagem;
+  // a pessoa só escolhe o contato e envia. Não precisa de número de telefone.
+  function shareToWhatsApp(text) {
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
   }
 
   async function copyPrepReport() {
@@ -1779,10 +1799,10 @@ function ReportsView({ reservations, properties }) {
   function ownerReportText() {
     const lines = [];
     lines.push(
-      `Acerto de ${monthLabel} — ${isOwnerReport ? ownerName : reportProperty}`
+      `*Acerto de ${monthLabel} — ${isOwnerReport ? ownerName : reportProperty}*`
     );
     if (!isOwnerReport && ownerProp && ownerProp.hostName)
-      lines.push(`Anfitrião: ${ownerProp.hostName}`);
+      lines.push(`_Anfitrião: ${ownerProp.hostName}_`);
     lines.push("");
     // Linhas de uma reserva: cabeçalho + detalhamento do repasse.
     const resLines = (r) => {
@@ -1790,10 +1810,10 @@ function ReportsView({ reservations, properties }) {
       const p = payoutForReservation(r);
       const g = Number(r.guests) || 0;
       const guestsPart = g > 0 ? ` · ${g} hóspede${g === 1 ? "" : "s"}` : "";
-      const header = `• ${fmtDateBR(r.checkIn)} a ${fmtDateBR(r.checkOut)} (${nights} noite${
+      const header = `🗓️ ${fmtDateBR(r.checkIn)} a ${fmtDateBR(r.checkOut)} (${nights} noite${
         nights === 1 ? "" : "s"
-      })${guestsPart} · ${r.guestName}`;
-      if (p === null) return [header + " — pago via Airbnb"];
+      })${guestsPart} · *${r.guestName}*`;
+      if (p === null) return [header, "— pago via Airbnb"];
       const prop = properties.find((x) => x.name === r.propertyName) || null;
       const bd = payoutBreakdown(r, prop);
       const out = [header];
@@ -1808,16 +1828,22 @@ function ReportsView({ reservations, properties }) {
     if (isOwnerReport) {
       groupedByProp.forEach((g) => {
         const subtotal = g.items.reduce((s, r) => s + (payoutForReservation(r) ?? 0), 0);
-        lines.push(`${g.name}:`);
-        g.items.forEach((r) => resLines(r).forEach((l) => lines.push(l)));
-        lines.push(`Subtotal ${g.name}: ${fmtMoney(subtotal)}`);
+        lines.push(`🏠 *${g.name}*`);
+        lines.push("");
+        g.items.forEach((r) => {
+          resLines(r).forEach((l) => lines.push(l));
+          lines.push("");
+        });
+        lines.push(`*Subtotal ${g.name}: ${fmtMoney(subtotal)}*`);
         lines.push("");
       });
     } else {
-      ownerReservations.forEach((r) => resLines(r).forEach((l) => lines.push(l)));
-      lines.push("");
+      ownerReservations.forEach((r) => {
+        resLines(r).forEach((l) => lines.push(l));
+        lines.push("");
+      });
     }
-    lines.push(`Total a repassar: ${fmtMoney(ownerPayoutTotal)}`);
+    lines.push(`*Total a repassar: ${fmtMoney(ownerPayoutTotal)}*`);
     return lines.join("\n");
   }
 
@@ -2055,7 +2081,7 @@ function ReportsView({ reservations, properties }) {
                 )}
               </div>
 
-              <div className="flex gap-3 mt-3 mb-6">
+              <div className="flex gap-3 mt-3">
                 <button
                   onClick={copyOwnerReport}
                   className="font-body flex-1 py-2.5 rounded-xl text-sm"
@@ -2071,6 +2097,13 @@ function ReportsView({ reservations, properties }) {
                   Ver texto
                 </button>
               </div>
+              <button
+                onClick={() => shareToWhatsApp(ownerReportText())}
+                className="font-body w-full py-2.5 rounded-xl text-sm mt-3 mb-6 flex items-center justify-center gap-2"
+                style={{ background: "#25D366", color: "white" }}
+              >
+                <MessageCircle size={16} /> Compartilhar no WhatsApp
+              </button>
 
               {showTextModal && (
                 <div
@@ -2184,7 +2217,7 @@ function ReportsView({ reservations, properties }) {
                 )}
               </div>
 
-              <div className="flex gap-3 mt-3 mb-6">
+              <div className="flex gap-3 mt-3">
                 <button
                   onClick={copyPrepReport}
                   className="font-body flex-1 py-2.5 rounded-xl text-sm"
@@ -2200,6 +2233,13 @@ function ReportsView({ reservations, properties }) {
                   Ver texto
                 </button>
               </div>
+              <button
+                onClick={() => shareToWhatsApp(prepReportText())}
+                className="font-body w-full py-2.5 rounded-xl text-sm mt-3 mb-6 flex items-center justify-center gap-2"
+                style={{ background: "#25D366", color: "white" }}
+              >
+                <MessageCircle size={16} /> Compartilhar no WhatsApp
+              </button>
 
               {showTextModal && (
                 <div
