@@ -849,10 +849,18 @@ export default function App() {
 
   const filteredSorted = useMemo(() => {
     const today = todayISO();
-    let list =
-      selectedProperty === "Todos"
-        ? reservations
-        : reservations.filter((r) => r.propertyName === selectedProperty);
+    let list;
+    if (selectedProperty === "Todos") {
+      list = reservations;
+    } else if (selectedProperty.startsWith("owner:")) {
+      const ownerName = selectedProperty.slice(6);
+      const ownerPropNames = properties
+        .filter((p) => (p.hostName || "").trim() === ownerName)
+        .map((p) => p.name);
+      list = reservations.filter((r) => ownerPropNames.includes(r.propertyName));
+    } else {
+      list = reservations.filter((r) => r.propertyName === selectedProperty);
+    }
     // "Anterior" = já fez check-out; em andamento conta como próxima.
     const isPast = (r) => r.checkOut <= today;
     if (listPeriod === "proximas") list = list.filter((r) => !isPast(r));
@@ -868,7 +876,7 @@ export default function App() {
       return [...upcoming, ...past];
     }
     return [...list].sort(asc);
-  }, [reservations, selectedProperty, listPeriod, listStatus]);
+  }, [reservations, properties, selectedProperty, listPeriod, listStatus]);
 
   const stats = useMemo(() => {
     const today = todayISO();
@@ -2197,6 +2205,7 @@ const CHAMFER = Math.round(CELL_WIDTH / 2);
 function CalendarView({
   properties,
   selectedProperty,
+  setSelectedProperty,
   reservations,
   calendarMonth,
   setCalendarMonth,
@@ -2329,9 +2338,24 @@ function CalendarView({
     });
   }
 
+  // Donos únicos (hostName preenchido), para o filtro "Por dono".
+  const owners = [...new Set(properties.map((p) => (p.hostName || "").trim()).filter(Boolean))].sort();
+
+  const isOwnerFilter = selectedProperty.startsWith("owner:");
+  const ownerFilterName = isOwnerFilter ? selectedProperty.slice(6) : null;
+
   const rowsProperties =
     selectedProperty === "Todos"
-      ? properties
+      ? // Sem filtro: mostra todos, mas agrupados por dono (imóveis do mesmo
+        // dono ficam em linhas adjacentes, em vez de espalhados alfabeticamente).
+        [...properties].sort((a, b) => {
+          const ha = (a.hostName || "").trim();
+          const hb = (b.hostName || "").trim();
+          if (ha !== hb) return ha.localeCompare(hb);
+          return a.name.localeCompare(b.name);
+        })
+      : isOwnerFilter
+      ? properties.filter((p) => (p.hostName || "").trim() === ownerFilterName)
       : properties.filter((p) => p.name === selectedProperty);
 
   const today = todayISO();
@@ -2371,6 +2395,35 @@ function CalendarView({
         >
           <ChevronRight size={18} color={TOKENS.pine} />
         </button>
+      </div>
+
+      <div
+        className="mb-3 rounded-2xl px-3 py-2"
+        style={{ background: TOKENS.cream, border: `1px solid ${TOKENS.sand}` }}
+      >
+        <select
+          value={selectedProperty}
+          onChange={(e) => setSelectedProperty(e.target.value)}
+          style={{ ...inputStyle, border: "none", padding: "2px 0" }}
+        >
+          <option value="Todos">Todos os imóveis</option>
+          {owners.length > 0 && (
+            <optgroup label="Por dono (agrupa os imóveis)">
+              {owners.map((o) => (
+                <option key={`owner:${o}`} value={`owner:${o}`}>
+                  👤 {o}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          <optgroup label="Por imóvel">
+            {properties.map((p) => (
+              <option key={p.id} value={p.name}>
+                {p.name}
+              </option>
+            ))}
+          </optgroup>
+        </select>
       </div>
 
       {rowsProperties.length === 0 ? (
