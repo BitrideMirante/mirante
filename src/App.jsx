@@ -2460,7 +2460,9 @@ function CalendarView({
               );
               return (
                 <Fragment key={p.id}>
-                  <div
+                 
+                  </div>
+<div
                     style={{
                       position: "sticky",
                       left: 0,
@@ -2468,20 +2470,29 @@ function CalendarView({
                       background: tintOpaque(color, 0.08),
                       borderLeft: `3px solid ${color}`,
                       borderBottom: `1px solid ${TOKENS.sand}`,
+                      height: ROW_HEIGHT,
+                      overflow: "hidden",
                     }}
                     className="p-2 flex items-center"
                   >
-                    <p className="font-body text-[12.5px] font-medium leading-tight" style={{ color: TOKENS.ink }}>
+                    <p
+                      className="font-body text-[12.5px] font-medium leading-tight"
+                      style={{
+                        color: TOKENS.ink,
+                        display: "-webkit-box",
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: "vertical",
+                        overflow: "hidden",
+                      }}
+                    >
                       {p.name}
                     </p>
                   </div>
-
-                  <div
+                <div
                     style={{
                       gridColumn: `2 / span ${days.length}`,
                       position: "relative",
-                      height: "100%",
-                      minHeight: ROW_HEIGHT,
+                      height: ROW_HEIGHT,
                     }}
                   >
                     <div style={{ display: "flex", height: "100%" }}>
