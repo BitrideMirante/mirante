@@ -5,6 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mirante</title>
     <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- PWA: permite instalar o app na tela inicial, em tela cheia -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#3D453D" />
+    <link rel="icon" href="/icon-192.png" />
+
+    <!-- iPhone/iOS: mesma coisa, com as tags específicas da Apple -->
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Mirante" />
   </head>
   <body>
     <div id="root"></div>
