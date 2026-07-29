@@ -2544,6 +2544,18 @@ function CalendarView({
                       const clip = `polygon(${hasLeftCut ? CHAMFER : 0}px 0, 100% 0, calc(100% - ${
                         hasRightCut ? CHAMFER : 0
                       }px) 100%, 0 100%)`;
+                    // Zona segura para o texto: a largura da caixa menos o padding
+                      // menos os cantos diagonais (CHAMFER) de cada lado que existir.
+                      // Sem isso, o corte diagonal pode fatiar o nome no meio mesmo
+                      // depois do truncate já ter "encolhido" o texto.
+                      const H_PADDING = 16; // 8px de cada lado, igual ao padding do botão
+                      const safeTextWidth = Math.max(
+                        0,
+                        widthPx -
+                          H_PADDING -
+                          (hasLeftCut ? CHAMFER : 0) -
+                          (hasRightCut ? CHAMFER : 0)
+                      );
                       return (
                         <button
                           key={r.id}
@@ -2566,12 +2578,17 @@ function CalendarView({
                             cursor: "pointer",
                           }}
                         >
-                          <span
-                            className="truncate"
-                            style={{ color: "white", letterSpacing: "0.01em", minWidth: 0 }}
-                          >
-                            {r.guestName.split(" ")[0]}
-                          </span>
+                        <span
+  className="truncate"
+  style={{
+    color: "white",
+    letterSpacing: "0.01em",
+    minWidth: 0,
+    maxWidth: safeTextWidth,
+  }}
+>
+  {r.guestName.split(" ")[0]}
+</span>
                         </button>
                       );
                     })}
