@@ -1590,11 +1590,44 @@ function OwnerReservationRow({ r, properties }) {
   );
 }
 
+function PrepReservationRow({ r }) {
+  const nights = nightsBetween(r.checkIn, r.checkOut);
+  const g = Number(r.guests) || 0;
+  const guestsPart = g > 0 ? ` · ${g} hóspede${g === 1 ? "" : "s"}` : "";
+  return (
+    <div
+      className="font-body text-sm pb-1.5"
+      style={{ color: TOKENS.ink, borderBottom: `1px solid ${TOKENS.sand}` }}
+    >
+      <div className="flex justify-between">
+        <span>
+          {fmtDateBR(r.checkIn)} a {fmtDateBR(r.checkOut)} ({nights} noite
+          {nights === 1 ? "" : "s"}){guestsPart} · {r.guestName}
+        </span>
+        <b
+          className="shrink-0 ml-2"
+          style={{ color: r.breakfast ? TOKENS.pine : TOKENS.moss }}
+        >
+          {r.breakfast ? "Com café" : "Sem café"}
+        </b>
+      </div>
+      {r.guestContact && (
+        <div className="mt-0.5" style={{ color: TOKENS.moss }}>
+          Contato: {r.guestContact}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReportsView({ reservations, properties }) {
   const [monthDate, setMonthDate] = useState(new Date());
   const [reportProperty, setReportProperty] = useState("");
   const [copied, setCopied] = useState(false);
   const [showTextModal, setShowTextModal] = useState(false);
+  // "financeiro" = acerto/repasse do mês; "preparo" = próximas estadias
+  // (sem valores em dinheiro) para o anfitrião se organizar.
+  const [reportMode, setReportMode] = useState("financeiro");
 
   const monthPrefix = `${monthDate.getFullYear()}-${String(
     monthDate.getMonth() + 1
@@ -1667,6 +1700,81 @@ function ReportsView({ reservations, properties }) {
       items: ownerReservations.filter((r) => r.propertyName === name),
     }))
     .filter((g) => g.items.length > 0);
+
+  // Relatório de preparação: próximas estadias (sem limite de data, sem
+  // valores em dinheiro), pro anfitrião saber quem chega, quando, e se
+  // precisa preparar café da manhã.
+  const todayForPrep = todayISO();
+  const upcomingForPrep = reservations
+    .filter((r) => selectedPropNames.includes(r.propertyName) && r.checkOut >= todayForPrep)
+    .sort((a, b) => (a.checkIn < b.checkIn ? -1 : 1));
+  const groupedByPropPrep = selectedPropNames
+    .map((name) => ({
+      name,
+      items: upcomingForPrep.filter((r) => r.propertyName === name),
+    }))
+    .filter((g) => g.items.length > 0);
+
+  function prepReportText() {
+    const lines = [];
+    lines.push(`Preparação de hospedagem — ${isOwnerReport ? ownerName : reportProperty}`);
+    lines.push(`Gerado em ${fmtDateBR(todayForPrep)}`);
+    lines.push("");
+    const resLine = (r) => {
+      const nights = nightsBetween(r.checkIn, r.checkOut);
+      const g = Number(r.guests) || 0;
+      const guestsPart = g > 0 ? ` · ${g} hóspede${g === 1 ? "" : "s"}` : "";
+      const breakfastPart = r.breakfast ? " · Com café da manhã" : " · Sem café da manhã";
+      const contactPart = r.guestContact ? ` · Contato: ${r.guestContact}` : "";
+      return `• ${fmtDateBR(r.checkIn)} a ${fmtDateBR(r.checkOut)} (${nights} noite${
+        nights === 1 ? "" : "s"
+      })${guestsPart} · ${r.guestName}${breakfastPart}${contactPart}`;
+    };
+    if (upcomingForPrep.length === 0) {
+      lines.push("Nenhuma estadia futura.");
+      return lines.join("\n");
+    }
+    if (isOwnerReport) {
+      groupedByPropPrep.forEach((g) => {
+        lines.push(`${g.name}:`);
+        g.items.forEach((r) => lines.push(resLine(r)));
+        lines.push("");
+      });
+    } else {
+      upcomingForPrep.forEach((r) => lines.push(resLine(r)));
+    }
+    return lines.join("\n");
+  }
+
+  async function copyPrepReport() {
+    const text = prepReportText();
+    let ok = false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      }
+    } catch (e) {}
+    if (!ok) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch (e) {}
+    }
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } else {
+      setShowTextModal(true);
+    }
+  }
 
   function ownerReportText() {
     const lines = [];
@@ -1757,6 +1865,27 @@ function ReportsView({ reservations, properties }) {
         }
       `}</style>
 
+      <div className="flex gap-1.5 mb-4">
+        {[
+          ["financeiro", "Financeiro"],
+          ["preparo", "Preparação"],
+        ].map(([val, label]) => (
+          <button
+            key={val}
+            onClick={() => setReportMode(val)}
+            className="font-body text-xs px-3 py-1.5 rounded-full"
+            style={{
+              background: reportMode === val ? TOKENS.pine : TOKENS.cream,
+              color: reportMode === val ? TOKENS.cream : TOKENS.ink,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {reportMode === "financeiro" && (
+        <>
       <div className="flex items-center justify-between mb-3">
         <button onClick={() => shiftMonth(-1)} aria-label="Mês anterior">
           <ChevronLeft size={20} color={TOKENS.pine} />
@@ -1969,6 +2098,135 @@ function ReportsView({ reservations, properties }) {
                         color: TOKENS.ink,
                       }}
                       value={ownerReportText()}
+                      onFocus={(e) => e.target.select()}
+                    />
+                    <button
+                      onClick={() => setShowTextModal(false)}
+                      className="font-body text-sm py-2.5 rounded-xl mt-3"
+                      style={{ background: TOKENS.pine, color: "white" }}
+                    >
+                      Fechar
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+        </>
+      )}
+
+      {reportMode === "preparo" && (
+        <>
+          <p className="font-display text-lg mb-2" style={{ color: TOKENS.ink }}>
+            Preparação para o anfitrião
+          </p>
+          <Field label="Dono ou imóvel">
+            <select
+              style={inputStyle}
+              value={reportProperty}
+              onChange={(e) => setReportProperty(e.target.value)}
+            >
+              <option value="">Escolha…</option>
+              {owners.length > 0 && (
+                <optgroup label="Por dono (agrupa os imóveis)">
+                  {owners.map((o) => (
+                    <option key={`owner:${o}`} value={`owner:${o}`}>
+                      👤 {o}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              <optgroup label="Por imóvel">
+                {properties.map((p) => (
+                  <option key={p.id} value={p.name}>
+                    {p.name}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+          </Field>
+
+          {reportProperty && (
+            <>
+              <div id="report-print" className="rounded-2xl p-4" style={{ background: TOKENS.cream }}>
+                <p className="font-display text-lg" style={{ color: TOKENS.ink }}>
+                  Próximas estadias
+                </p>
+                <p className="font-body text-sm" style={{ color: TOKENS.ink }}>
+                  {isOwnerReport ? `Anfitrião: ${ownerName}` : reportProperty}
+                </p>
+                {upcomingForPrep.length === 0 ? (
+                  <p className="font-body text-sm mt-3" style={{ color: TOKENS.moss }}>
+                    Nenhuma estadia futura.
+                  </p>
+                ) : (
+                  <div className="mt-3 flex flex-col gap-3">
+                    {groupedByPropPrep.map((g) => (
+                      <div key={g.name}>
+                        {isOwnerReport && (
+                          <p
+                            className="font-body text-sm font-semibold mb-1"
+                            style={{ color: TOKENS.pine }}
+                          >
+                            {g.name}
+                          </p>
+                        )}
+                        <div className="flex flex-col gap-2">
+                          {g.items.map((r) => (
+                            <PrepReservationRow key={r.id} r={r} />
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3 mt-3 mb-6">
+                <button
+                  onClick={copyPrepReport}
+                  className="font-body flex-1 py-2.5 rounded-xl text-sm"
+                  style={{ background: TOKENS.river, color: "white" }}
+                >
+                  {copied ? "Copiado ✓" : "Copiar texto"}
+                </button>
+                <button
+                  onClick={() => setShowTextModal(true)}
+                  className="font-body flex-1 py-2.5 rounded-xl text-sm"
+                  style={{ background: TOKENS.clay, color: "white" }}
+                >
+                  Ver texto
+                </button>
+              </div>
+
+              {showTextModal && (
+                <div
+                  className="fixed inset-0 z-50 flex items-center justify-center px-5"
+                  style={{ background: "rgba(0,0,0,0.45)" }}
+                  onClick={() => setShowTextModal(false)}
+                >
+                  <div
+                    className="rounded-2xl p-4 w-full max-w-md"
+                    style={{ background: "white", maxHeight: "80vh", display: "flex", flexDirection: "column" }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <p className="font-body text-sm mb-2" style={{ color: TOKENS.ink }}>
+                      Texto do relatório — selecione e copie (segure e arraste no
+                      celular), ou cole numa mensagem para o anfitrião.
+                    </p>
+                    <textarea
+                      readOnly
+                      className="font-body text-sm w-full rounded-xl p-3"
+                      style={{
+                        border: `1px solid ${TOKENS.sand}`,
+                        minHeight: "220px",
+                        flex: 1,
+                        resize: "none",
+                        color: TOKENS.ink,
+                      }}
+                      value={prepReportText()}
                       onFocus={(e) => e.target.select()}
                     />
                     <button
