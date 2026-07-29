@@ -1104,7 +1104,7 @@ export default function App() {
 
       {storageError && (
         <div
-          className="mx-4 mt-3 rounded-xl p-3 text-sm font-body flex items-start gap-2"
+          className="fixed left-4 right-4 bottom-24 z-50 rounded-xl p-3 text-sm font-body flex items-start gap-2 shadow-lg"
           style={{ background: "#F0E6DB", color: TOKENS.danger }}
         >
           <AlertCircle size={18} className="shrink-0 mt-0.5" />
@@ -2387,7 +2387,7 @@ function CalendarView({
           style={{
             background: TOKENS.cream,
             overflow: "auto",
-            maxHeight: "calc(100vh - 215px)",
+            maxHeight: "calc(100vh - 160px)",
             border: `1px solid ${TOKENS.sand}`,
             boxShadow: "0 1px 3px rgba(34,38,31,0.06)",
           }}
@@ -2609,29 +2609,6 @@ function CalendarView({
           </div>
         </div>
       )}
-
-      <div
-        className="flex gap-4 mt-3 flex-wrap items-center rounded-2xl px-3 py-2.5"
-        style={{ background: TOKENS.cream, border: `1px solid ${TOKENS.sand}` }}
-      >
-        <Legend color={TOKENS.pine} label="Pago" />
-        <Legend color={TOKENS.clay} label="Pendente" />
-        <Legend color="white" label="Livre" border />
-      </div>
-    </div>
-  );
-}
-
-function Legend({ color, label, border }) {
-  return (
-    <div className="flex items-center gap-1.5">
-      <span
-        className="w-2.5 h-2.5 rounded-full inline-block"
-        style={{ background: color, border: border ? `1px solid ${TOKENS.moss}` : "none" }}
-      />
-      <span className="font-body text-[11.5px]" style={{ color: TOKENS.ink }}>
-        {label}
-      </span>
     </div>
   );
 }
