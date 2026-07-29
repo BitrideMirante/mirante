@@ -2566,7 +2566,10 @@ function CalendarView({
                             cursor: "pointer",
                           }}
                         >
-                          <span className="truncate" style={{ color: "white", letterSpacing: "0.01em" }}>
+                          <span
+                            className="truncate"
+                            style={{ color: "white", letterSpacing: "0.01em", minWidth: 0 }}
+                          >
                             {r.guestName.split(" ")[0]}
                           </span>
                         </button>
